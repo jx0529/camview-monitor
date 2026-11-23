@@ -2,8 +2,12 @@ package com.camview.monitor;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -305,8 +309,8 @@ public class MainActivity extends Activity {
     private void addSingleCamera() {
         LinearLayout box = Ui.column(this);
         box.addView(Ui.title(this, "添加摄像头"));
-        box.addView(Ui.label(this, "IP 地址"));
-        final EditText ipIn = Ui.input(this, "", "例如 192.168.1.64", false);
+        box.addView(Ui.label(this, "IP 地址（也可以直接粘贴浏览器里能打开的那个地址）"));
+        final EditText ipIn = Ui.input(this, "", "192.168.31.89", false);
         ipIn.setInputType(InputType.TYPE_CLASS_TEXT);
         box.addView(ipIn);
         box.addView(Ui.label(this, "用户名（留空用默认：" + cfg.defaultUser + "）"));
@@ -323,9 +327,9 @@ public class MainActivity extends Activity {
                 .create();
         Ui.styleDialog(d);
         d.setOnShowListener(dd -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            String ip = ipIn.getText().toString().trim();
+            String ip = RtspProbe.normalizeHost(ipIn.getText().toString());
             if (!NetUtil.isValidIp(ip)) {
-                Ui.toast(this, "IP 格式不正确");
+                Ui.toast(this, "IP 格式不正确：从地址里没识别出 IP");
                 return;
             }
             String user = userIn.getText().toString().trim();
@@ -531,34 +535,37 @@ public class MainActivity extends Activity {
     }
 
     private void showCameraItemMenu(final CameraRow row) {
-        String[] items = {"🔍 放大画面", "📁 移动到分组", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转",
-                "♻ 重新连接", "🗑 删除摄像头"};
+        String[] items = {"🔍 放大画面", "🩺 连接诊断（连不上先点这个）", "📁 移动到分组",
+                "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转", "♻ 重新连接", "🗑 删除摄像头"};
         Ui.actionSheet(this, row.ip, items, (index, text) -> {
             switch (index) {
                 case 0:
                     openFullscreen(row.ip);
                     break;
                 case 1:
-                    moveCameraDialog(row.ip);
+                    diagnoseCamera(row);
                     break;
                 case 2:
-                    chooseRotation(row);
+                    moveCameraDialog(row.ip);
                     break;
                 case 3:
+                    chooseRotation(row);
+                    break;
+                case 4:
                     row.stream.toggleFlipH();
                     cfg.save();
                     row.updateTag();
                     break;
-                case 4:
+                case 5:
                     row.stream.toggleFlipV();
                     cfg.save();
                     row.updateTag();
                     break;
-                case 5:
+                case 6:
                     row.stream.restart();
                     Ui.toast(this, "正在重新连接 " + row.ip);
                     break;
-                case 6:
+                case 7:
                     new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
                             .setTitle("删除摄像头")
                             .setMessage("确定删除 " + row.ip + " ？")
@@ -571,6 +578,77 @@ public class MainActivity extends Activity {
                     break;
             }
         });
+    }
+
+    // ==================== 连接诊断 ====================
+
+    private void diagnoseCamera(final CameraRow row) {
+        final CameraInfo info = row.info;
+        final AlertDialog progress = new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle("正在诊断 " + info.ip)
+                .setMessage("探测端口 → 认证 → 路径 → 编码，大约 10~20 秒…")
+                .setCancelable(false)
+                .create();
+        progress.show();
+        final Context appCtx = getApplicationContext();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final String report = RtspProbe.run(info.ip, info.user, info.password,
+                        Math.min(cfg.timeoutMs, 3000));
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try { progress.dismiss(); } catch (Exception ignored) { }
+                        showReportDialog("诊断报告 · " + info.ip, report, row);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** 诊断发现可用路径后，一键把它设成第一优先模板 */
+    private void applyWorkingTemplate(final CameraRow row) {
+        String tpl = RtspProbe.workingTemplate;
+        if (tpl == null || tpl.isEmpty()) {
+            Ui.toast(this, "没有探测到可用路径，先看报告里的结论");
+            return;
+        }
+        List<String> tpls = new ArrayList<>(cfg.rtspTemplates);
+        tpls.remove(tpl);
+        tpls.add(0, tpl);
+        cfg.rtspTemplates = tpls;
+        cfg.save();
+        row.stream.restart();
+        Ui.toast(this, "已设为第一优先地址，正在重连：" + row.ip);
+    }
+
+    private void showReportDialog(String title, String report, final CameraRow row) {
+        final boolean hasTemplate = RtspProbe.workingTemplate != null;
+        ScrollView sv = new ScrollView(this);
+        TextView tv = new TextView(this);
+        tv.setText(report);
+        tv.setTextSize(13);
+        tv.setTextColor(0xFFE6EDF3);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setLineSpacing(0, 1.4f);
+        int p = Ui.dp(this, 16);
+        tv.setPadding(p, p, p, p);
+        tv.setTextIsSelectable(true);
+        sv.addView(tv);
+        AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle(title)
+                .setView(sv);
+        if (hasTemplate) {
+            b.setPositiveButton("一键用这个地址", (d, w) -> applyWorkingTemplate(row));
+        }
+        b.setNeutralButton("复制报告", (d, w) -> {
+                    ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("rtsp-report", report));
+                    Ui.toast(this, "已复制，可粘贴发给开发者");
+                });
+        b.setNegativeButton("关闭", null);
+        b.show();
     }
 
     private void chooseRotation(final CameraRow row) {

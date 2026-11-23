@@ -108,7 +108,9 @@ public class CameraRow extends FrameLayout {
             case CameraStream.ST_FAILED:
                 dot.setBackgroundResource(R.drawable.dot_red);
                 statusText.setVisibility(VISIBLE);
-                statusText.setText("连接失败，正在重试…");
+                String err = stream.lastError;
+                statusText.setText(err == null || err.isEmpty()
+                        ? "连接失败，正在重试…" : "连接失败：" + err);
                 break;
             default:
                 dot.setBackgroundResource(R.drawable.dot_gray);

@@ -38,8 +38,8 @@ public class AppConfig {
 
     public static List<String> defaultTemplates() {
         return new ArrayList<>(Arrays.asList(
-                "rtsp://{user}:{password}@{ip}:554/Streaming/Channels/101",
                 "rtsp://{user}:{password}@{ip}:554/Streaming/Channels/102",
+                "rtsp://{user}:{password}@{ip}:554/Streaming/Channels/101",
                 "rtsp://{user}:{password}@{ip}:554/cam/realmonitor?channel=1&subtype=0",
                 "rtsp://{user}:{password}@{ip}:554/onvif1",
                 "rtsp://{user}:{password}@{ip}:554/h264"));
@@ -47,7 +47,7 @@ public class AppConfig {
 
     /** 手机端固定单列显示，保留该字段以兼容旧配置 */
     public int maxCols = 1;
-    public int timeoutMs = 3000;
+    public int timeoutMs = 8000;
     public int itemsPerPage = 6;
     public boolean showFps = true;
     /** true = MediaCodec 硬件解码（GPU）；false = 软件解码 */
@@ -84,6 +84,8 @@ public class AppConfig {
             defaultPassword = o.optString("default_password", defaultPassword);
             maxCols = o.optInt("max_cols", 1);
             timeoutMs = o.optInt("connection_timeout_ms", timeoutMs);
+            // 旧版本默认只给了 3 秒，手机上很容易超时，抬到 8 秒
+            if (timeoutMs < 5000) timeoutMs = 8000;
             itemsPerPage = o.optInt("items_per_page", itemsPerPage);
             showFps = o.optBoolean("show_fps", showFps);
             hwDecode = o.optBoolean("hw_decode", hwDecode);
@@ -441,10 +443,30 @@ public class AppConfig {
 
     // ==================== 工具 ====================
 
+    /** URL 里账号密码必须转义，否则密码含 @ : / 等字符时整条地址会被解析错 */
+    public static String encodeAuth(String s) {
+        if (s == null) return "";
+        try {
+            return java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20");
+        } catch (Exception e) {
+            return s;
+        }
+    }
+
     public static String renderTemplate(String template, String ip, String user, String password) {
-        return template.replace("{ip}", ip)
-                .replace("{user}", user == null ? "" : user)
-                .replace("{password}", password == null ? "" : password);
+        String u = user == null ? "" : user;
+        String p = password == null ? "" : password;
+        String auth = "";
+        if (!u.isEmpty() || !p.isEmpty()) {
+            auth = encodeAuth(u) + ":" + encodeAuth(p) + "@";
+        }
+        // 模板里的 "{user}:{password}@" 整体替换，避免出现 rtsp://:@ip 这种非法地址
+        String out = template
+                .replace("{user}:{password}@", auth)
+                .replace("{user}", encodeAuth(u))
+                .replace("{password}", encodeAuth(p))
+                .replace("{ip}", ip);
+        return out;
     }
 
     private static String readAll(File f) throws Exception {

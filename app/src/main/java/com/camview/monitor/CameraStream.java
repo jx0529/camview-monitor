@@ -50,6 +50,10 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     public int state = ST_IDLE;
     public volatile float fps = 0f;
+    /** 最近一次失败原因（给界面显示，方便定位问题） */
+    public volatile String lastError = "";
+    /** 当前正在尝试的地址（不含密码） */
+    public volatile String currentUrl = "";
 
     private ExoPlayer player;
     private TextureView textureView;
@@ -58,6 +62,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     private boolean active = true;
     private int templateIndex = 0;
     private int retryCount = 0;
+    /** 当前是否用 RTP over TCP；失败一轮后自动退回 UDP 再试 */
+    private boolean useTcp = true;
     private long frames = 0;
     private long fpsStart = 0;
     private int videoW = 0, videoH = 0;
@@ -170,6 +176,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     private void startPlayer() {
         if (released || textureView == null) return;
         releasePlayer();
+        lastError = "";
         state = ST_CONNECTING;
         try {
             DefaultRenderersFactory renderers = new DefaultRenderersFactory(ctx)
@@ -201,19 +208,31 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     private MediaSource buildSource() {
         String url = buildUrl();
+        currentUrl = maskPassword(url);
         RtspMediaSource.Factory factory = new RtspMediaSource.Factory()
-                .setForceUseRtpTcp(cfg.rtspTcp)
-                .setTimeoutMs(Math.max(1000, Math.min(cfg.timeoutMs, 15000)))
+                .setForceUseRtpTcp(useTcp)
+                .setTimeoutMs(Math.max(3000, Math.min(cfg.timeoutMs, 20000)))
                 .setUserAgent("CamView/1.0 Android");
         return factory.createMediaSource(MediaItem.fromUri(url));
+    }
+
+    private static String maskPassword(String url) {
+        int a = url.indexOf("://");
+        int at = url.indexOf('@');
+        if (a < 0 || at < 0) return url;
+        int colon = url.indexOf(':', a + 3);
+        if (colon < 0 || colon > at) return url;
+        return url.substring(0, colon + 1) + "***" + url.substring(at);
     }
 
     private String buildUrl() {
         List<String> templates = cfg.rtspTemplates;
         if (templates == null || templates.isEmpty()) {
-            return "rtsp://" + (info.user == null ? "" : info.user) + ":"
-                    + (info.password == null ? "" : info.password) + "@" + info.ip
-                    + ":554/Streaming/Channels/101";
+            String u = info.user == null ? "" : info.user;
+            String pw = info.password == null ? "" : info.password;
+            String auth = (u.isEmpty() && pw.isEmpty()) ? ""
+                    : AppConfig.encodeAuth(u) + ":" + AppConfig.encodeAuth(pw) + "@";
+            return "rtsp://" + auth + info.ip + ":554/Streaming/Channels/102";
         }
         int idx = Math.max(0, Math.min(templateIndex, templates.size() - 1));
         return AppConfig.renderTemplate(templates.get(idx), info.ip, info.user, info.password);
@@ -281,20 +300,58 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     @Override
     public void onPlayerError(PlaybackException error) {
-        Log.w(TAG, info.ip + " 播放错误: " + error.getMessage());
+        lastError = explain(error);
+        Log.w(TAG, info.ip + " 播放错误: " + lastError);
         handleFailure();
+    }
+
+    /** 把播放器错误翻译成一句人能看懂的话 */
+    public static String explain(PlaybackException error) {
+        String raw = error.getMessage() == null ? "" : error.getMessage();
+        Throwable c = error.getCause();
+        String low = (raw + " " + (c == null ? "" : String.valueOf(c.getMessage()))).toLowerCase();
+        if (low.contains("unauthoriz") || low.contains("401"))
+            return "401 认证失败：用户名或密码不对";
+        if (low.contains("404") || low.contains("not found"))
+            return "404 路径不对：设备 RTSP 路径与该模板不符";
+        if (low.contains("timed out") || low.contains("timeout"))
+            return "连接超时：设备响应太慢或被拦截";
+        if (low.contains("refused") || low.contains("failed to connect"))
+            return "连不上：554 端口未开放或被防火墙拦了";
+        if (low.contains("unsupported") || low.contains("codec"))
+            return "解码失败：编码不支持，试试「软件兼容」模式";
+        switch (error.errorCode) {
+            case PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT:
+                return "连接超时（检查 IP 与端口）";
+            case PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED:
+                return "网络连接失败（端口不通）";
+            case PlaybackException.ERROR_CODE_DECODING_FAILED:
+            case PlaybackException.ERROR_CODE_DECODER_INIT_FAILED:
+                return "解码器初始化失败（切「软件兼容」再试）";
+            default:
+                break;
+        }
+        if (raw.length() > 90) raw = raw.substring(0, 90) + "…";
+        return raw.isEmpty() ? ("播放失败（错误码 " + error.errorCode + "）") : raw;
     }
 
     private void handleFailure() {
         if (released) return;
         state = ST_FAILED;
         releasePlayer();
-        if (templateIndex + 1 < (cfg.rtspTemplates == null ? 0 : cfg.rtspTemplates.size())) {
+        int count = cfg.rtspTemplates == null ? 0 : cfg.rtspTemplates.size();
+        handler.removeCallbacks(reconnectTask);
+        if (templateIndex + 1 < count) {
             // 换下一个 RTSP 模板（不同品牌摄像头的路径不同）
             templateIndex++;
             state = ST_CONNECTING;
-            handler.removeCallbacks(reconnectTask);
             handler.postDelayed(reconnectTask, 1000);
+        } else if (useTcp && count > 0) {
+            // TCP 全失败，再按 UDP 把模板过一遍（有的机器只认 UDP）
+            useTcp = false;
+            templateIndex = 0;
+            state = ST_CONNECTING;
+            handler.postDelayed(reconnectTask, 1200);
         } else {
             scheduleReconnect();
         }
@@ -303,6 +360,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     private void scheduleReconnect() {
         if (released) return;
         templateIndex = 0;
+        useTcp = cfg.rtspTcp;
         retryCount++;
         long delay = Math.min(15000L, 2000L * retryCount);
         handler.removeCallbacks(reconnectTask);
@@ -313,6 +371,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     public void restart() {
         templateIndex = 0;
         retryCount = 0;
+        useTcp = cfg.rtspTcp;
+        lastError = "";
         state = ST_CONNECTING;
         handler.removeCallbacks(reconnectTask);
         if (textureView != null) startPlayer();

@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "notes": "首个 Android 手机版：单列懒加载、MediaCodec 硬件解码、分组/分页/扫描/旋转翻转/全屏缩放，内置在线更新。",
-  "apk_path": "release/camview-monitor-1.0.0.apk",
-  "size": 3746377
+  "version": "1.0.2",
+  "notes": "修复连不上：账号密码自动转义、超时放宽到 8 秒、TCP 失败自动再试 UDP、失败原因直接显示在画面上；新增「连接诊断」，逐条告诉你端口/认证/路径/编码哪一步不通，并支持一键应用可用地址。",
+  "apk_path": "release/camview-monitor-1.0.2.apk",
+  "size": 3756177
 }
