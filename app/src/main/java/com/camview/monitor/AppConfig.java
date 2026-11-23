@@ -263,6 +263,16 @@ public class AppConfig {
         save();
     }
 
+    /** 删除全部摄像头（分组名称保留，摄像头配置清空） */
+    public synchronized int clearAllCameras() {
+        int n = totalCameraCount();
+        cameras.clear();
+        for (List<String> ips : groups.values()) ips.clear();
+        currentPage = 1;
+        save();
+        return n;
+    }
+
     public List<String> allIps() {
         LinkedHashSet<String> set = new LinkedHashSet<>();
         for (List<String> ips : groups.values()) set.addAll(ips);

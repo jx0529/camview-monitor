@@ -10,6 +10,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // LibVLC 离线包（避免构建时从 maven 反复拉 79MB）
+        flatDir { dirs '/home/user/tools/libs' }
     }
 }
 rootProject.name = "CamViewMonitor"

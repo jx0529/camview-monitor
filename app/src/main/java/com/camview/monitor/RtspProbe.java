@@ -23,6 +23,8 @@ public class RtspProbe {
 
     /** 探测成功后的可用模板（内含 {user}/{password}/{ip} 占位符），失败为 null */
     public static volatile String workingTemplate = null;
+    /** 设备返回的 WWW-Authenticate 认证方式（用于判断 Media3 是否支持） */
+    public static volatile String challenge = "";
 
     private static final int[] PORTS = {554, 8554, 10554, 80, 8000};
     private static final String[] PATHS = {
@@ -212,6 +214,7 @@ public class RtspProbe {
                                        int timeoutMs) {
         Resp a = fetch(host, port, buildRequest("DESCRIBE", uri, 1, null), timeoutMs);
         if (a.code == 401 && a.wwwAuth != null && !a.wwwAuth.isEmpty()) {
+            if (challenge.isEmpty()) challenge = a.wwwAuth.split("\\|")[0].trim();
             String auth = authHeader(a.wwwAuth.split("\\|")[0], user, password, "DESCRIBE", uri);
             if (auth != null) {
                 Resp b = fetch(host, port, buildRequest("DESCRIBE", uri, 2, auth), timeoutMs);
@@ -281,6 +284,7 @@ public class RtspProbe {
     public static String run(String rawIp, String user, String password, int timeoutMs) {
         String host = normalizeHost(rawIp);
         workingTemplate = null;
+        challenge = "";
         StringBuilder r = new StringBuilder();
         r.append("目标: ").append(host.isEmpty() ? "(空)" : host).append("\n");
         r.append("账号: ").append(user == null || user.isEmpty() ? "(空)" : user).append("\n\n");
@@ -344,6 +348,9 @@ public class RtspProbe {
                 r.append("  ✖ ").append(path).append("  →  ").append(res).append("\n");
             }
         }
+        if (!challenge.isEmpty()) {
+            r.append("认证方式: ").append(challenge).append("\n");
+        }
         r.append("\n【3】结论\n");
 
         if (anyOk) {
@@ -359,6 +366,10 @@ public class RtspProbe {
             }
             if (okDesc != null && okDesc.contains("H.265")) {
                 r.append("  ! 该码流是 H.265，老手机硬解可能不支持，务必试「软件兼容」。\n");
+            }
+            if (challenge.toLowerCase().contains("digest") && challenge.toLowerCase().contains("qop")) {
+                r.append("\n  ! 该设备使用 Digest(qop=\"auth\") 认证，手机内置播放器(Media3)不支持这种写法，\n");
+                r.append("    本版本会自动切到 VLC 兼容通道播放（画面右上角显示「fps(兼容模式)」）。\n");
             }
         } else {
             r.append("  ❌ 所有路径都连不上 RTSP。\n");

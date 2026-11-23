@@ -121,18 +121,26 @@ public class CameraRow extends FrameLayout {
 
         if (cfg.showFps) {
             fpsText.setVisibility(VISIBLE);
-            fpsText.setText(String.format(java.util.Locale.US, "%.1f fps", fps));
-            if (fps > 15) fpsText.setTextColor(0xFF3FB950);
-            else if (fps > 5) fpsText.setTextColor(0xFFD29922);
-            else if (fps > 0.01f) fpsText.setTextColor(0xFFF85149);
-            else fpsText.setTextColor(0xFF8B949E);
+            if (stream.isVlcMode()) {
+                fpsText.setText(stream.streamRate > 0.5f
+                        ? String.format(java.util.Locale.US, "%.0f fps", stream.streamRate)
+                        : "实时");
+                fpsText.setTextColor(0xFF8B949E);
+            } else {
+                fpsText.setText(String.format(java.util.Locale.US, "%.1f fps", fps));
+                if (fps > 15) fpsText.setTextColor(0xFF3FB950);
+                else if (fps > 5) fpsText.setTextColor(0xFFD29922);
+                else if (fps > 0.01f) fpsText.setTextColor(0xFFF85149);
+                else fpsText.setTextColor(0xFF8B949E);
+            }
         } else {
             fpsText.setVisibility(GONE);
         }
     }
 
     public boolean hasLiveFrame() {
-        return System.currentTimeMillis() - lastLiveTs < 2000 && stream.fps > 0.01f;
+        return System.currentTimeMillis() - lastLiveTs < 2000
+                && (stream.fps > 0.01f || stream.isVlcMode());
     }
 
     public void destroy() {

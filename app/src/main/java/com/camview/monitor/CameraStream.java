@@ -1,12 +1,19 @@
 package com.camview.monitor;
 
 import android.content.Context;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.TextureView;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+
+import org.videolan.libvlc.LibVLC;
+import org.videolan.libvlc.Media;
+import org.videolan.libvlc.MediaPlayer;
+import org.videolan.libvlc.interfaces.IMedia;
+import org.videolan.libvlc.interfaces.IVLCVout;
 
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
@@ -68,6 +75,13 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     private long fpsStart = 0;
     private int videoW = 0, videoH = 0;
 
+    // ---- VLC 备用通道（海康/大华 Digest(qop) 认证 Media3 不支持时使用）----
+    private static LibVLC libVlc;
+    private MediaPlayer vlcPlayer;
+    private boolean vlcMode = false;
+    /** VLC 模式下码流的标称帧率（实时帧率统计不到，用它显示） */
+    public volatile float streamRate = 0f;
+
     private final Runnable fpsTick = new Runnable() {
         @Override
         public void run() {
@@ -123,14 +137,40 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         if (!value) {
             inactiveSince = System.currentTimeMillis();
             if (player != null) player.setPlayWhenReady(false);
+            if (vlcPlayer != null) {
+                try {
+                    vlcPlayer.pause();
+                } catch (Throwable ignored) {
+                }
+            }
             return;
         }
         if (wasActive) {
             if (player != null && state != ST_FAILED) player.setPlayWhenReady(true);
+            if (vlcPlayer != null && state != ST_FAILED) {
+                try {
+                    vlcPlayer.play();
+                } catch (Throwable ignored) {
+                }
+            }
             return;
         }
         long pausedMs = inactiveSince == 0 ? 0 : System.currentTimeMillis() - inactiveSince;
         inactiveSince = 0;
+        if (vlcMode) {
+            if (state == ST_FAILED || pausedMs > 8000 || vlcPlayer == null) {
+                retryCount = 0;
+                templateIndex = 0;
+                handler.removeCallbacks(reconnectTask);
+                if (textureView != null) startVlc();
+            } else {
+                try {
+                    vlcPlayer.play();
+                } catch (Throwable ignored) {
+                }
+            }
+            return;
+        }
         if (state == ST_FAILED) {
             // 失败状态回来时立刻重试
             retryCount = 0;
@@ -149,10 +189,15 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         return active;
     }
 
+    public boolean isVlcMode() {
+        return vlcMode;
+    }
+
     public void release() {
         released = true;
         handler.removeCallbacksAndMessages(null);
         releasePlayer();
+        stopVlc();
         textureView = null;
         holder = null;
     }
@@ -175,6 +220,10 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     private void startPlayer() {
         if (released || textureView == null) return;
+        if (vlcMode) {
+            startVlc();
+            return;
+        }
         releasePlayer();
         lastError = "";
         state = ST_CONNECTING;
@@ -337,6 +386,19 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     private void handleFailure() {
         if (released) return;
+        // 海康/大华的 Digest 认证 Media3 解不了，直接切 VLC 通道
+        if (!vlcMode && isAuthProblem(lastError)) {
+            vlcMode = true;
+            retryCount = 0;
+            templateIndex = 0;
+            useTcp = cfg.rtspTcp;
+            lastError = "";
+            releasePlayer();
+            stopVlc();
+            handler.removeCallbacks(reconnectTask);
+            startVlc();
+            return;
+        }
         state = ST_FAILED;
         releasePlayer();
         int count = cfg.rtspTemplates == null ? 0 : cfg.rtspTemplates.size();
@@ -355,6 +417,13 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         } else {
             scheduleReconnect();
         }
+    }
+
+    private static boolean isAuthProblem(String err) {
+        if (err == null) return false;
+        String e = err.toLowerCase();
+        return e.contains("401") || e.contains("认证") || e.contains("unauthoriz")
+                || e.contains("digest") || e.contains("authentic");
     }
 
     private void scheduleReconnect() {
@@ -376,6 +445,118 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         state = ST_CONNECTING;
         handler.removeCallbacks(reconnectTask);
         if (textureView != null) startPlayer();
+    }
+
+
+    // ==================== VLC 备用通道 ====================
+
+    /**
+     * 海康/大华等设备返回的 401 头是 `Digest qop="auth", realm=..., nonce=...`，
+     * Media3 内置的解析器只认 realm 打头，且摘要不带 qop，因此永远认证不过。
+     * 这里用 LibVLC 兜底：它支持完整的 Digest(qop) 认证、RTSP over TCP/UDP、H.264/H.265。
+     */
+    private void startVlc() {
+        if (released || textureView == null) return;
+        stopVlc();
+        state = ST_CONNECTING;
+        lastError = "";
+        try {
+            if (libVlc == null) {
+                List<String> args = new ArrayList<>();
+                args.add("--no-audio");
+                args.add("--no-video-title-show");
+                args.add("--no-sub-autodetect-file");
+                args.add("--network-caching=300");
+                args.add("--live-caching=300");
+                libVlc = new LibVLC(ctx, args);
+            }
+            MediaPlayer p = new MediaPlayer(libVlc);
+            IVLCVout vout = p.getVLCVout();
+            vout.setVideoView(textureView);
+            vout.attachViews();
+            Media m = new Media(libVlc, Uri.parse(buildUrl()));
+            m.setHWDecoderEnabled(cfg.hwDecode, false);
+            if (cfg.rtspTcp) m.addOption(":rtsp-tcp");
+            m.addOption(":network-caching=300");
+            p.setEventListener(new MediaPlayer.EventListener() {
+                @Override
+                public void onEvent(MediaPlayer.Event event) {
+                    onVlcEvent(event);
+                }
+            });
+            p.setMedia(m);
+            m.release();
+            vlcPlayer = p;
+            currentUrl = maskPassword(buildUrl());
+            p.play();
+            applyTransform();
+        } catch (Throwable t) {
+            Log.e(TAG, "VLC 启动失败: " + t);
+            lastError = "备用播放器启动失败：" + t.getClass().getSimpleName();
+            state = ST_FAILED;
+            scheduleReconnect();
+        }
+    }
+
+    private void onVlcEvent(MediaPlayer.Event event) {
+        if (!vlcMode) return;
+        switch (event.type) {
+            case MediaPlayer.Event.Playing:
+                state = ST_LIVE;
+                retryCount = 0;
+                updateVlcVideoSize();
+                break;
+            case MediaPlayer.Event.Buffering:
+            case MediaPlayer.Event.Opening:
+                if (state != ST_LIVE) state = ST_CONNECTING;
+                break;
+            case MediaPlayer.Event.Vout:
+                updateVlcVideoSize();
+                break;
+            case MediaPlayer.Event.EncounteredError:
+                lastError = "播放失败：设备拒绝或码流不可解析";
+                state = ST_FAILED;
+                scheduleReconnect();
+                break;
+            case MediaPlayer.Event.EndReached:
+                state = ST_FAILED;
+                lastError = "连接被断开";
+                scheduleReconnect();
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void updateVlcVideoSize() {
+        if (vlcPlayer == null) return;
+        try {
+            IMedia.VideoTrack vt = vlcPlayer.getCurrentVideoTrack();
+            if (vt != null && vt.width > 0 && vt.height > 0) {
+                videoW = vt.width;
+                videoH = vt.height;
+                if (vt.frameRateDen > 0) streamRate = vt.frameRateNum / (float) vt.frameRateDen;
+                layoutVideo();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void stopVlc() {
+        if (vlcPlayer == null) return;
+        try {
+            vlcPlayer.getVLCVout().detachViews();
+        } catch (Throwable ignored) {
+        }
+        try {
+            vlcPlayer.stop();
+        } catch (Throwable ignored) {
+        }
+        try {
+            vlcPlayer.release();
+        } catch (Throwable ignored) {
+        }
+        vlcPlayer = null;
     }
 
     // ==================== 帧统计 / 画面变换 ====================

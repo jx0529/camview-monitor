@@ -144,7 +144,8 @@ public class MainActivity extends Activity {
     }
 
     private void showCameraMenu() {
-        String[] items = {"➕ 添加单个摄像头", "➕➕ 批量添加摄像头", "🔍 扫描网段", "🗑 删除摄像头"};
+        String[] items = {"➕ 添加单个摄像头", "➕➕ 批量添加摄像头", "🔍 扫描网段", "🗑 删除摄像头",
+                "🧹 删除全部摄像头（需二次确认）"};
         Ui.actionSheet(this, "摄像头", items, (index, text) -> {
             switch (index) {
                 case 0:
@@ -159,8 +160,40 @@ public class MainActivity extends Activity {
                 case 3:
                     deleteCameras();
                     break;
+                case 4:
+                    deleteAllCameras();
+                    break;
             }
         });
+    }
+
+    /** 删除全部摄像头：两步确认，避免误触清空 200 多路配置 */
+    private void deleteAllCameras() {
+        final int total = cfg.totalCameraCount();
+        if (total <= 0) {
+            Ui.toast(this, "当前没有任何摄像头");
+            return;
+        }
+        new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle("删除全部摄像头")
+                .setMessage("将删除所有分组里的 " + total + " 个摄像头。\n\n"
+                        + "分组名称会保留，只清空摄像头列表。\n删除后需要重新添加或重新扫描。")
+                .setPositiveButton("继续", (d, w) -> confirmDeleteAllAgain(total))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void confirmDeleteAllAgain(final int total) {
+        new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle("最后确认")
+                .setMessage("真的要删除全部 " + total + " 个摄像头吗？\n此操作不可撤销。")
+                .setPositiveButton("全部删除", (d, w) -> {
+                    int removed = cfg.clearAllCameras();
+                    refreshAll();
+                    Ui.toast(this, "已删除 " + removed + " 个摄像头");
+                })
+                .setNegativeButton("我再想想", null)
+                .show();
     }
 
     private void showSortMenu() {
@@ -516,7 +549,8 @@ public class MainActivity extends Activity {
     private void updateStatusBar() {
         int live = 0;
         for (CameraRow r : rows) {
-            if (r.stream.state == CameraStream.ST_LIVE && r.stream.fps > 0.01f) live++;
+            if (r.stream.state == CameraStream.ST_LIVE
+                    && (r.stream.fps > 0.01f || r.stream.isVlcMode())) live++;
         }
         String decode = cfg.hwDecode ? "硬件解码(MediaCodec)" : "软件解码";
         if (cfg.hwDecode && ("cuda".equals(cfg.gpuMode) || "hardware".equals(cfg.gpuMode))) {

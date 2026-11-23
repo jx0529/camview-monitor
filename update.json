@@ -1,6 +1,6 @@
 {
-  "version": "1.0.2",
-  "notes": "修复连不上：账号密码自动转义、超时放宽到 8 秒、TCP 失败自动再试 UDP、失败原因直接显示在画面上；新增「连接诊断」，逐条告诉你端口/认证/路径/编码哪一步不通，并支持一键应用可用地址。",
-  "apk_path": "release/camview-monitor-1.0.2.apk",
-  "size": 3756177
+  "version": "1.0.3",
+  "notes": "修复海康/大华 Digest(qop) 认证导致的黑屏：手机内置播放器(Media3)不支持这种认证写法，现在认证失败会自动切到 VLC 兼容通道播放（支持 H.264/H.265、TCP/UDP）。同时新增「删除全部摄像头」（二次确认）。",
+  "apk_path": "release/camview-monitor-1.0.3.apk",
+  "size": 23727750
 }

@@ -213,20 +213,28 @@ public class FullscreenActivity extends Activity {
     private void updateHeader() {
         if (stream == null) return;
         float fps = stream.fps;
+        boolean vlc = stream.isVlcMode();
         if (stream.state == CameraStream.ST_LIVE) {
             dot.setBackgroundResource(R.drawable.dot_green);
-            statusText.setVisibility(fps > 0.01f ? View.GONE : View.VISIBLE);
-            if (fps <= 0.01f) statusText.setText("已连接，等待画面…");
+            statusText.setVisibility((vlc || fps > 0.01f) ? View.GONE : View.VISIBLE);
+            if (!vlc && fps <= 0.01f) statusText.setText("已连接，等待画面…");
         } else if (stream.state == CameraStream.ST_FAILED) {
             dot.setBackgroundResource(R.drawable.dot_red);
             statusText.setVisibility(View.VISIBLE);
-            statusText.setText("连接失败，正在重试…");
+            String err = stream.lastError;
+            statusText.setText(err == null || err.isEmpty() ? "连接失败，正在重试…" : "连接失败：" + err);
         } else {
             dot.setBackgroundResource(R.drawable.dot_orange);
             statusText.setVisibility(View.VISIBLE);
             statusText.setText("连接中…");
         }
-        fpsText.setText(String.format(Locale.US, "%.1f fps", fps));
+        if (vlc) {
+            fpsText.setText(stream.streamRate > 0.5f
+                    ? String.format(Locale.US, "%.0f fps(兼容模式)", stream.streamRate)
+                    : "兼容模式");
+        } else {
+            fpsText.setText(String.format(Locale.US, "%.1f fps", fps));
+        }
     }
 
     @Override
