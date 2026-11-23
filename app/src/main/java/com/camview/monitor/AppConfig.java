@@ -220,9 +220,11 @@ public class AppConfig {
         ip = ip == null ? "" : ip.trim();
         if (ip.length() == 0) return false;
         if (findCamera(ip) != null) return false;
+        String cu = Creds.clean(user);
+        String cp = Creds.clean(password);
         CameraInfo c = new CameraInfo(ip,
-                user == null || user.length() == 0 ? defaultUser : user,
-                password == null || password.length() == 0 ? defaultPassword : password);
+                cu.isEmpty() ? defaultUser : cu,
+                cp.isEmpty() ? defaultPassword : cp);
         cameras.add(c);
         List<String> list = groups.get(currentGroup);
         if (list == null) {
@@ -245,9 +247,9 @@ public class AppConfig {
         for (String raw : ips) {
             String ip = raw == null ? "" : raw.trim();
             if (ip.length() == 0 || findCamera(ip) != null) continue;
-            cameras.add(new CameraInfo(ip,
-                    user == null || user.length() == 0 ? defaultUser : user,
-                    password == null || password.length() == 0 ? defaultPassword : password));
+            String cu = Creds.clean(user);
+            String cp = Creds.clean(password);
+            cameras.add(new CameraInfo(ip, cu.isEmpty() ? defaultUser : cu, cp.isEmpty() ? defaultPassword : cp));
             if (!list.contains(ip)) list.add(ip);
             added++;
         }
@@ -267,8 +269,8 @@ public class AppConfig {
     public synchronized void setCameraCredentials(String ip, String user, String password) {
         CameraInfo c = findCamera(ip);
         if (c == null) return;
-        c.user = user == null ? "" : user;
-        c.password = password == null ? "" : password;
+        c.user = Creds.clean(user);
+        c.password = Creds.clean(password);
         revision++;
         save();
     }
@@ -467,15 +469,16 @@ public class AppConfig {
     public static String encodeAuth(String s) {
         if (s == null) return "";
         try {
-            return java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20");
+            // 先清掉粘贴带进来的换行/空格/全角字符，再做 URL 转义
+            return java.net.URLEncoder.encode(Creds.clean(s), "UTF-8").replace("+", "%20");
         } catch (Exception e) {
             return s;
         }
     }
 
     public static String renderTemplate(String template, String ip, String user, String password) {
-        String u = user == null ? "" : user;
-        String p = password == null ? "" : password;
+        String u = Creds.clean(user);
+        String p = Creds.clean(password);
         String auth = "";
         if (!u.isEmpty() || !p.isEmpty()) {
             auth = encodeAuth(u) + ":" + encodeAuth(p) + "@";

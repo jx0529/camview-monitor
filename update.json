@@ -1,6 +1,6 @@
 {
-  "version": "1.0.5",
-  "notes": "新增[网页抓图模式]：RTSP 认证死活不过时，直接用 HTTP 抓图接口拉画面；诊断会列出可用抓图地址；长按可手动切换",
-  "apk_path": "release/camview-monitor-1.0.5.apk",
-  "size": 23736486
+  "version": "1.0.6",
+  "notes": "账号密码自动清洗(换行/空格/全角/零宽字符)+自检报告；新增网页根路径验证密码；支持自定义抓图地址",
+  "apk_path": "release/camview-monitor-1.0.6.apk",
+  "size": 23738930
 }

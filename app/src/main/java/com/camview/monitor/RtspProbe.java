@@ -373,6 +373,49 @@ public class RtspProbe {
         return describe(a);
     }
 
+    /**
+     * 用网页首页验证账号密码。
+     * 返回 1=认证通过（200/302/403 之外的正常页面）、0=认证失败、-1=不确定（该路径不需要认证或不存在）。
+     */
+    private static int rootCredCheck(String host, int port, String path, String user, String password,
+                                     int timeoutMs, StringBuilder log) {
+        Resp a = fetch(host, port, buildHttpGet(path, host, null), timeoutMs);
+        if (a.code <= 0) {
+            log.append("  ").append(path).append("  → 无响应\n");
+            return -1;
+        }
+        if (a.code != 401) {
+            log.append("  ").append(path).append("  → ").append(a.code).append("（不需要认证，无法验证密码）\n");
+            return -1;
+        }
+        if (a.wwwAuth == null || a.wwwAuth.isEmpty()) {
+            log.append("  ").append(path).append("  → 401 但没有认证头\n");
+            return -1;
+        }
+        String ch = a.wwwAuth.split("\\|")[0].trim();
+        String auth = authHeader(ch, user, password, "GET", path, true);
+        int code = -1;
+        if (auth != null) {
+            Resp b = fetch(host, port, buildHttpGet(path, host, auth), timeoutMs);
+            code = b.code;
+            if (code == 200 || code == 302 || code == 301) {
+                log.append("  ").append(path).append("  → 200 ✅ 认证通过\n");
+                return 1;
+            }
+            log.append("  ").append(path).append("  → Digest ").append(code).append("\n");
+        }
+        // 再试 Basic（不少国产机只认 Basic，或者网页只认 Basic）
+        String basic = "Basic " + android.util.Base64.encodeToString(
+                (user + ":" + password).getBytes(), android.util.Base64.NO_WRAP);
+        Resp c = fetch(host, port, buildHttpGet(path, host, basic), timeoutMs);
+        if (c.code == 200 || c.code == 301 || c.code == 302) {
+            log.append("  ").append(path).append("  → 200 ✅ 认证通过（Basic）\n");
+            return 1;
+        }
+        log.append("  ").append(path).append("  → Basic/").append(c.code).append(" ✖\n");
+        return 0;
+    }
+
     private static long tcpLatency(String host, int port, int timeoutMs) {
         Socket s = null;
         long t0 = System.currentTimeMillis();
@@ -388,7 +431,10 @@ public class RtspProbe {
     }
 
     /** 生成诊断报告文本（在子线程调用，不要在主线程跑） */
-    public static String run(String rawIp, String user, String password, int timeoutMs) {
+    public static String run(String rawIp, String rawUser, String rawPassword, int timeoutMs) {
+        // 关键：先把账号密码里的换行、空格、全角字符清掉再发给设备
+        String user = Creds.clean(rawUser);
+        String password = Creds.clean(rawPassword);
         String host = normalizeHost(rawIp);
         workingTemplate = null;
         challenge = "";
@@ -396,9 +442,11 @@ public class RtspProbe {
         workingSnap = null;
         StringBuilder r = new StringBuilder();
         r.append("目标: ").append(host.isEmpty() ? "(空)" : host).append("\n");
-        r.append("账号: ").append(user == null || user.isEmpty() ? "(空)" : user).append("\n");
         String pw = password == null ? "" : password;
-        r.append("密码: ").append(pw.isEmpty() ? "(空)" : (pw.length() + " 位")).append("\n\n");
+        r.append(Creds.inspect("账号", rawUser)).append("\n");
+        r.append(Creds.inspect("密码", rawPassword)).append("\n");
+        r.append("  实际发送: 账号=").append(user.isEmpty() ? "(空)" : user)
+                .append("  密码=").append(pw.isEmpty() ? "(空)" : (pw.length() + " 位")).append("\n\n");
         if (host.isEmpty()) {
             return r.append("❌ IP 为空，先填写摄像头 IP（例如 192.168.31.89）").toString();
         }
@@ -487,6 +535,33 @@ public class RtspProbe {
             }
         }
 
+        // 【3.5】用网页首页/登录页验证账号密码 —— 这是最可靠的一招：
+        // 这类设备的任意路径未认证都会先回 401，所以"某个接口 401"不等于密码错；
+        // 而首页带认证后能返回 200/302，就说明账号密码是对的。
+        int rootVerdict = -1;
+        String rootDetail = "";
+        if (httpOpen) {
+            int port = open.contains(80) ? 80 : 8000;
+            r.append("\n【3.5】网页根路径验证（最可靠：认证通过会返回 200/302）\n");
+            String[] roots = {"/", "/doc/page/login.asp", "/index.html", "/login.asp", "/cgi-bin/luci"};
+            for (String path : roots) {
+                int v = rootCredCheck(host, port, path, user, pw, to, r);
+                if (v == 1) {
+                    rootVerdict = 1;
+                    rootDetail = path;
+                    break;
+                } else if (v == -1 && rootVerdict < 0) {
+                    rootDetail = path;
+                }
+            }
+            if (rootVerdict == 1) {
+                credentialsValid = true;
+                r.append("  ✅ 账号密码确认正确（").append(rootDetail).append(" 认证后返回正常页面）\n");
+            } else {
+                r.append("  ✖ 首页也没通过认证 → 这台设备不认这套账号密码，或它用的不是 Basic/Digest\n");
+            }
+        }
+
         r.append("\n【4】结论\n");
         if (anyOk) {
             r.append("  ✅ RTSP 通路正常：").append(okPath).append(" → ").append(okDesc).append("\n\n");
@@ -502,8 +577,8 @@ public class RtspProbe {
             r.append("  ❌ RTSP 与 HTTP 都不通：确认手机和摄像机在同一网段，并在设备后台确认 RTSP 端口。\n");
             return r.toString();
         }
-        if (gotAuth) {
-            r.append("  ✅ 账号密码是对的（HTTP 接口 200），这台设备是认证方式/写法的问题，不是密码。\n");
+        if (gotAuth || rootVerdict == 1) {
+            r.append("  ✅ 账号密码是对的（HTTP 认证通过），问题在 RTSP 认证写法/路径，不是密码。\n");
             r.append("  App 会自动改用 VLC 兼容通道播放。若仍不出画面，到设备后台把认证方式改成 Basic，\n");
             r.append("  或关闭「认证增强 / 安全模式」，再重连。\n");
             return r.toString();

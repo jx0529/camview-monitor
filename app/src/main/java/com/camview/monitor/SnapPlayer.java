@@ -90,8 +90,8 @@ public class SnapPlayer {
     public SnapPlayer(String host, String ip, String user, String password, Listener l) {
         this.host = host;
         this.port = 80;
-        this.user = user == null ? "" : user;
-        this.password = password == null ? "" : password;
+        this.user = Creds.clean(user);
+        this.password = Creds.clean(password);
         this.listener = l;
     }
 

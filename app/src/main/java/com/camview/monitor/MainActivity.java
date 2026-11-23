@@ -568,9 +568,34 @@ public class MainActivity extends Activity {
         startActivity(i);
     }
 
+    /** 手动填一条 HTTP 抓图地址（浏览器 F12 里抓到的那个 image/jpeg 请求） */
+    private void customSnapUrl(final CameraRow row) {
+        LinearLayout box = Ui.column(this);
+        box.addView(Ui.title(this, "自定义抓图地址"));
+        box.addView(Ui.label(this, "填网页里返回图片的那个地址（http://... 开头）"));
+        final EditText input = Ui.input(this, "http://" + row.ip + "/cgi-bin/snapshot.cgi?channel=1",
+                row.info.snapUrl == null ? "" : row.info.snapUrl, false);
+        box.addView(input);
+        AlertDialog d = Ui.dialog(this).setView(box)
+                .setPositiveButton("使用这个地址", null)
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.setOnShowListener(dd -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String url = input.getText().toString().trim();
+            if (!url.startsWith("http")) {
+                Ui.toast(this, "地址要以 http:// 开头");
+                return;
+            }
+            d.dismiss();
+            applySnapMode(row, url);
+        }));
+        d.show();
+    }
+
     private void showCameraItemMenu(final CameraRow row) {
         String[] items = {"🔍 放大画面", "🩺 连接诊断（连不上先点这个）", "📷 网页抓图模式（从 HTTP 拉图）",
-                "📁 移动到分组", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转", "♻ 重新连接", "🗑 删除摄像头"};
+                "📁 移动到分组", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转", "♻ 重新连接", "🗑 删除摄像头", "🔗 自定义抓图地址"};
         Ui.actionSheet(this, row.ip, items, (index, text) -> {
             switch (index) {
                 case 0:
@@ -613,6 +638,9 @@ public class MainActivity extends Activity {
                             })
                             .setNegativeButton("取消", null)
                             .show();
+                    break;
+                case 9:
+                    customSnapUrl(row);
                     break;
             }
         });
