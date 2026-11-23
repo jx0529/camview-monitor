@@ -1,6 +1,6 @@
 {
-  "version": "1.0.4",
-  "notes": "修复：认证诊断可按密码重测并自动保存；全部失败自动切 VLC 兼容通道；新增[删除全部摄像头]二次确认",
-  "apk_path": "release/camview-monitor-1.0.4.apk",
-  "size": 23730550
+  "version": "1.0.5",
+  "notes": "新增[网页抓图模式]：RTSP 认证死活不过时，直接用 HTTP 抓图接口拉画面；诊断会列出可用抓图地址；长按可手动切换",
+  "apk_path": "release/camview-monitor-1.0.5.apk",
+  "size": 23736486
 }

@@ -77,6 +77,7 @@ public class CameraRow extends FrameLayout {
         if (info.rotation != 0) sb.append("旋转").append(info.rotation).append("°");
         if (info.flipH) sb.append(sb.length() > 0 ? " · " : "").append("水平翻转");
         if (info.flipV) sb.append(sb.length() > 0 ? " · " : "").append("垂直翻转");
+        if (stream.isSnapMode()) sb.append(sb.length() > 0 ? " · " : "").append("网页抓图");
         tagText.setText(sb.toString());
         tagText.setVisibility(sb.length() > 0 ? VISIBLE : GONE);
         // 变换改了要重新应用
@@ -121,7 +122,10 @@ public class CameraRow extends FrameLayout {
 
         if (cfg.showFps) {
             fpsText.setVisibility(VISIBLE);
-            if (stream.isVlcMode()) {
+            if (stream.isSnapMode()) {
+                fpsText.setText(String.format(java.util.Locale.US, "抓图 %.1f fps", stream.snapFps));
+                fpsText.setTextColor(stream.snapFps > 0.5f ? 0xFF3FB950 : 0xFFD29922);
+            } else if (stream.isVlcMode()) {
                 fpsText.setText(stream.streamRate > 0.5f
                         ? String.format(java.util.Locale.US, "%.0f fps", stream.streamRate)
                         : "实时");

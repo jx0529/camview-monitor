@@ -35,8 +35,19 @@ public class RtspProbe {
     /** 典型 HTTP 快照接口，用来验证账号密码是否正确 */
     private static final String[] HTTP_PATHS = {
             "/ISAPI/Streaming/channels/101/picture",
-            "/cgi-bin/snapshot.cgi?channel=1"
+            "/cgi-bin/snapshot.cgi?channel=1",
+            "/cgi-bin/snapshot.cgi",
+            "/snapshot.cgi",
+            "/webcapture.jpg?command=snap&channel=1",
+            "/jpg/image.jpg",
+            "/tmpfs/auto.jpg",
+            "/image/jpeg.cgi",
+            "/snapshot",
+            "/cgi-bin/hi3510/snap.cgi?&-snap"
     };
+
+    /** 探测到的可用抓图地址（用于「网页抓图模式」） */
+    public static volatile String workingSnap = null;
 
     /** 探测成功后的可用模板（内含 {user}/{password}/{ip} 占位符），失败为 null */
     public static volatile String workingTemplate = null;
@@ -340,6 +351,28 @@ public class RtspProbe {
         return b.code + " " + (b.reason == null ? "" : b.reason);
     }
 
+    /** 账号密码写进路径的常见写法（雄迈 / 天视通 / 通用国产机） */
+    private static List<String> credPaths(String host, String user, String password) {
+        List<String> out = new ArrayList<>();
+        String u = user == null ? "" : user;
+        String p = password == null ? "" : password;
+        out.add("/user=" + u + "&password=" + p + "&channel=1&stream=0.sdp?real_stream");
+        out.add("/user=" + u + "&password=" + p + "&channel=1&stream=1.sdp?real_stream");
+        out.add("/user=" + u + "&password=" + p + "&channel=0&stream=0.sdp?real_stream");
+        out.add("/user=" + u + "&password=" + p + "&channel=1&stream=0.sdp");
+        return out;
+    }
+
+    /** 直接 DESCRIBE（地址里已带账号），不带 Authorization 头 */
+    private static String describePlain(String host, int port, String path, int timeoutMs) {
+        String uri = "rtsp://" + host + ":" + port + path;
+        Resp a = fetch(host, port, buildRtspRequest("DESCRIBE", uri, 1, null), timeoutMs);
+        if (a.code <= 0) return "无响应（" + a.reason + "）";
+        if (a.code == 404) return "404 路径不存在";
+        if (a.code == 401) return "401 认证失败";
+        return describe(a);
+    }
+
     private static long tcpLatency(String host, int port, int timeoutMs) {
         Socket s = null;
         long t0 = System.currentTimeMillis();
@@ -360,6 +393,7 @@ public class RtspProbe {
         workingTemplate = null;
         challenge = "";
         credentialsValid = false;
+        workingSnap = null;
         StringBuilder r = new StringBuilder();
         r.append("目标: ").append(host.isEmpty() ? "(空)" : host).append("\n");
         r.append("账号: ").append(user == null || user.isEmpty() ? "(空)" : user).append("\n");
@@ -414,15 +448,42 @@ public class RtspProbe {
         }
         if (!challenge.isEmpty()) r.append("  认证方式: ").append(challenge).append("\n");
 
+        // 很多国产机（雄迈/天视通等）只认把账号密码写在路径里的地址
+        if (!anyOk && rtspPort > 0 && user != null && !user.isEmpty()) {
+            r.append("  再试「账号写进地址」写法（国产机型常用）\n");
+            for (String path : credPaths(host, user, pw)) {
+                String res = describePlain(host, rtspPort, path, to);
+                if (res.startsWith("200")) {
+                    anyOk = true;
+                    okPath = path;
+                    okDesc = res;
+                    workingTemplate = "rtsp://{ip}:" + rtspPort + path.replace(user, "{user}").replace(pw, "{password}");
+                    r.append("  ✅ ").append(path).append("  →  ").append(res).append("\n");
+                    break;
+                } else {
+                    r.append("  ✖ ").append(path).append("  →  ").append(res).append("\n");
+                }
+            }
+        }
+
         boolean httpOpen = open.contains(80) || open.contains(8000);
         boolean gotAuth = false;
         if (httpOpen) {
             int port = open.contains(80) ? 80 : 8000;
             r.append("\n【3】HTTP 账号校验（用来判断密码对不对）\n");
+            int i = 0;
             for (String hp : HTTP_PATHS) {
+                if (workingSnap != null) break;
                 String res = httpCredentialCheck(host, port, hp, user == null ? "" : user, pw, to);
-                if (res.startsWith("200 认证成功")) gotAuth = true;
+                if (res.startsWith("200 认证成功")) {
+                    gotAuth = true;
+                    workingSnap = "http://" + host + (port == 80 ? "" : ":" + port) + hp;
+                }
                 r.append("  ").append(hp).append("  →  ").append(res).append("\n");
+                if (++i >= 6) break;
+            }
+            if (workingSnap != null) {
+                r.append("  ✅ 可用的抓图地址: ").append(workingSnap).append("\n");
             }
         }
 
@@ -445,6 +506,13 @@ public class RtspProbe {
             r.append("  ✅ 账号密码是对的（HTTP 接口 200），这台设备是认证方式/写法的问题，不是密码。\n");
             r.append("  App 会自动改用 VLC 兼容通道播放。若仍不出画面，到设备后台把认证方式改成 Basic，\n");
             r.append("  或关闭「认证增强 / 安全模式」，再重连。\n");
+            return r.toString();
+        }
+        if (workingSnap != null) {
+            r.append("  ✅ 这台设备可以「从网页拉图」：\n");
+            r.append("     ").append(workingSnap).append("\n");
+            r.append("  App 会用这个地址按 2~4 帧/秒抓图显示（不是实时流，但保证有画面）。\n");
+            r.append("  点下面「📷 用网页抓图模式」即可切换。\n");
             return r.toString();
         }
         r.append("  ❌ RTSP 全部 401，HTTP 也认证失败。两种可能：\n");

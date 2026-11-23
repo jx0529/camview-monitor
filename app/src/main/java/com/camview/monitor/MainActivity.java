@@ -569,8 +569,8 @@ public class MainActivity extends Activity {
     }
 
     private void showCameraItemMenu(final CameraRow row) {
-        String[] items = {"🔍 放大画面", "🩺 连接诊断（连不上先点这个）", "📁 移动到分组",
-                "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转", "♻ 重新连接", "🗑 删除摄像头"};
+        String[] items = {"🔍 放大画面", "🩺 连接诊断（连不上先点这个）", "📷 网页抓图模式（从 HTTP 拉图）",
+                "📁 移动到分组", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转", "♻ 重新连接", "🗑 删除摄像头"};
         Ui.actionSheet(this, row.ip, items, (index, text) -> {
             switch (index) {
                 case 0:
@@ -580,26 +580,30 @@ public class MainActivity extends Activity {
                     diagnoseCamera(row);
                     break;
                 case 2:
-                    moveCameraDialog(row.ip);
+                    row.stream.switchToSnap(null);
+                    Ui.toast(this, "已切换到网页抓图模式（HTTP 拉图）\n" + row.ip);
                     break;
                 case 3:
-                    chooseRotation(row);
+                    moveCameraDialog(row.ip);
                     break;
                 case 4:
+                    chooseRotation(row);
+                    break;
+                case 5:
                     row.stream.toggleFlipH();
                     cfg.save();
                     row.updateTag();
                     break;
-                case 5:
+                case 6:
                     row.stream.toggleFlipV();
                     cfg.save();
                     row.updateTag();
                     break;
-                case 6:
+                case 7:
                     row.stream.restart();
                     Ui.toast(this, "正在重新连接 " + row.ip);
                     break;
-                case 7:
+                case 8:
                     new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
                             .setTitle("删除摄像头")
                             .setMessage("确定删除 " + row.ip + " ？")
@@ -657,8 +661,17 @@ public class MainActivity extends Activity {
         Ui.toast(this, "已设为第一优先地址，正在重连：" + row.ip);
     }
 
+    /** 诊断发现可用抓图地址后，切成网页抓图模式 */
+    private void applySnapMode(final CameraRow row, String url) {
+        row.info.snapUrl = url;
+        row.stream.switchToSnap(url);
+        cfg.save();
+        Ui.toast(this, "已切到网页抓图模式：" + url);
+    }
+
     private void showReportDialog(String title, String report, final CameraRow row) {
         final boolean hasTemplate = RtspProbe.workingTemplate != null;
+        final String snapUrl = RtspProbe.workingSnap;
         ScrollView sv = new ScrollView(this);
         TextView tv = new TextView(this);
         tv.setText(report);
@@ -673,7 +686,9 @@ public class MainActivity extends Activity {
         AlertDialog.Builder b = new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
                 .setTitle(title)
                 .setView(sv);
-        if (hasTemplate) {
+        if (snapUrl != null && !snapUrl.isEmpty()) {
+            b.setPositiveButton("📷 用网页抓图模式", (d, w) -> applySnapMode(row, snapUrl));
+        } else if (hasTemplate) {
             b.setPositiveButton("一键用这个地址", (d, w) -> applyWorkingTemplate(row));
         }
         b.setNeutralButton("🔑 换个密码重测", (d, w) -> retestWithPassword(row));

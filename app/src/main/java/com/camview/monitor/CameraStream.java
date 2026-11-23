@@ -8,6 +8,7 @@ import android.util.Log;
 import android.view.TextureView;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 
 import org.videolan.libvlc.LibVLC;
 import org.videolan.libvlc.Media;
@@ -82,6 +83,13 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     /** VLC 模式下码流的标称帧率（实时帧率统计不到，用它显示） */
     public volatile float streamRate = 0f;
 
+    // ---- 网页抓图模式（HTTP JPEG 轮询，RTSP 死活认证不过时的兜底）----
+    private SnapPlayer snapPlayer;
+    private boolean snapMode = false;
+    private ImageView snapView;
+    /** 抓图模式下的实际帧率 */
+    public volatile float snapFps = 0f;
+
     private final Runnable fpsTick = new Runnable() {
         @Override
         public void run() {
@@ -124,7 +132,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         this.holder = videoHolder;
         released = false;
         applyTransform();
-        startPlayer();
+        if (snapMode) startSnap();
+        else startPlayer();
         handler.post(fpsTick);
     }
 
@@ -143,6 +152,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 } catch (Throwable ignored) {
                 }
             }
+            if (snapPlayer != null) snapPlayer.setActive(false);
             return;
         }
         if (wasActive) {
@@ -157,6 +167,14 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         }
         long pausedMs = inactiveSince == 0 ? 0 : System.currentTimeMillis() - inactiveSince;
         inactiveSince = 0;
+        if (snapMode) {
+            if (snapPlayer != null) snapPlayer.setActive(true);
+            if (state == ST_FAILED || snapPlayer == null) {
+                handler.removeCallbacks(reconnectTask);
+                startSnap();
+            }
+            return;
+        }
         if (vlcMode) {
             if (state == ST_FAILED || pausedMs > 8000 || vlcPlayer == null) {
                 retryCount = 0;
@@ -198,6 +216,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         handler.removeCallbacksAndMessages(null);
         releasePlayer();
         stopVlc();
+        stopSnap();
         textureView = null;
         holder = null;
     }
@@ -429,6 +448,15 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 startVlc();
                 return;
             }
+            // 连 VLC 都播不出来 → 改用「网页抓图模式」（HTTP JPEG 轮询）
+            if (!snapMode) {
+                snapMode = true;
+                retryCount = 0;
+                lastError = "";
+                handler.removeCallbacks(reconnectTask);
+                startSnap();
+                return;
+            }
             scheduleReconnect();
         }
     }
@@ -458,9 +486,115 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         lastError = "";
         state = ST_CONNECTING;
         handler.removeCallbacks(reconnectTask);
-        if (textureView != null) startPlayer();
+        if (snapMode) startSnap();
+        else if (textureView != null) startPlayer();
     }
 
+
+    // ==================== 网页抓图模式 ====================
+
+    /** 用户手动选择"用网页抓图模式" */
+    public void switchToSnap(String url) {
+        if (url != null && !url.isEmpty()) info.snapUrl = url;
+        snapMode = true;
+        releasePlayer();
+        stopVlc();
+        retryCount = 0;
+        lastError = "";
+        handler.removeCallbacks(reconnectTask);
+        startSnap();
+    }
+
+    public boolean isSnapMode() {
+        return snapMode;
+    }
+
+    private void ensureSnapView() {
+        if (snapView != null || holder == null) return;
+        ImageView iv = new ImageView(ctx);
+        iv.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        float rot = info.rotation;
+        iv.setRotation(rot);
+        if (info.flipH) iv.setScaleX(-1f);
+        if (info.flipV) iv.setScaleY(-1f);
+        holder.addView(iv);
+        snapView = iv;
+    }
+
+    /** 开始按 HTTP 抓图（每 400ms 一张）显示画面 */
+    private void startSnap() {
+        if (released || holder == null) return;
+        ensureSnapView();
+        state = ST_CONNECTING;
+        lastError = "";
+        if (info.snapUrl != null && !info.snapUrl.isEmpty()) lastError = "";
+        stopSnap();
+        snapMode = true;
+        SnapPlayer sp = new SnapPlayer(info.ip, info.ip,
+                info.user == null ? "" : info.user,
+                info.password == null ? "" : info.password,
+                new SnapPlayer.Listener() {
+                    @Override
+                    public void onFrame(android.graphics.Bitmap bmp) {
+                        if (snapView != null) snapView.setImageBitmap(bmp);
+                        state = ST_LIVE;
+                    }
+
+                    @Override
+                    public void onState(int st) {
+                        if (snapPlayer != null && snapPlayer.getWorkingUrl() != null) {
+                            info.snapUrl = snapPlayer.getWorkingUrl();
+                        }
+                        if (st == ST_LIVE) {
+                            state = ST_LIVE;
+                        } else if (state == ST_LIVE && st == ST_CONNECTING) {
+                            state = ST_CONNECTING;
+                        }
+                    }
+
+                    @Override
+                    public void onFail(String reason) {
+                        lastError = "抓图失败：" + reason;
+                        state = ST_FAILED;
+                        retryCount++;
+                        handler.removeCallbacks(reconnectTask);
+                        handler.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!released && snapMode) startSnap();
+                            }
+                        }, 20000);
+                    }
+
+                    @Override
+                    public void onFps(float f) {
+                        snapFps = f;
+                        fps = f;
+                    }
+                });
+        if (info.snapUrl != null && !info.snapUrl.isEmpty()) sp.setFixedUrl(info.snapUrl);
+        int w = holder.getWidth();
+        sp.setTargetWidth(w > 0 ? w : 600);
+        sp.setActive(active);
+        snapPlayer = sp;
+        sp.start();
+        currentUrl = info.snapUrl != null ? info.snapUrl : ("http://" + info.ip + "/");
+    }
+
+    private void stopSnap() {
+        if (snapPlayer != null) {
+            try {
+                snapPlayer.stop();
+            } catch (Throwable ignored) {
+            }
+            snapPlayer = null;
+        }
+        if (snapView != null) {
+            snapView.setImageDrawable(null);
+        }
+    }
 
     // ==================== VLC 备用通道 ====================
 
