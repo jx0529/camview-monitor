@@ -421,6 +421,56 @@ public class RtspProbe {
         return 0;
     }
 
+    /**
+     * 隧道自检：起本地 Basic 注入隧道，模拟播放器发一条不带认证的 DESCRIBE，
+     * 看能不能拿到 200 + SDP。这是"App 里能不能出画面"的最直接证据。
+     */
+    public static String tunnelSelfTest(String host, int port, String path,
+                                       String user, String password, int timeoutMs) {
+        RtspBasicTunnel tunnel = null;
+        Socket s = null;
+        try {
+            tunnel = new RtspBasicTunnel(host, port, user, password);
+            int lp = tunnel.start();
+            if (lp <= 0) return "✖ 本地隧道启动失败（端口被占用？）";
+            s = new Socket();
+            s.connect(new InetSocketAddress("127.0.0.1", lp), Math.max(1500, timeoutMs));
+            s.setSoTimeout(Math.max(1500, timeoutMs));
+            String uri = "rtsp://" + host + ":" + port + path;
+            String req = buildRtspRequest("DESCRIBE", uri, 1, null);
+            OutputStream out = s.getOutputStream();
+            out.write(req.getBytes("UTF-8"));
+            out.flush();
+            InputStream in = s.getInputStream();
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            byte[] tmp = new byte[2048];
+            int n = in.read(tmp);
+            if (n <= 0) return "✖ 隧道无响应（连接建立但没数据回来）";
+            buf.write(tmp, 0, n);
+            String raw = buf.toString("UTF-8");
+            String firstLine = raw.split("\r\n")[0];
+            if (firstLine.contains("200")) {
+                String codec = "";
+                for (String line : raw.split("\r\n")) {
+                    if (line.startsWith("a=rtpmap") && codec.isEmpty()) {
+                        String v = line.toUpperCase(Locale.US);
+                        if (v.contains("H264")) codec = "H.264";
+                        else if (v.contains("H265")) codec = "H.265";
+                        else if (v.contains("JPEG")) codec = "MJPEG";
+                    }
+                }
+                return "✅ 隧道 200 OK" + (codec.isEmpty() ? "" : " · " + codec) + "（播放器可以出画面）";
+            }
+            if (firstLine.contains("401")) return "✖ 隧道里仍然 401（认证头没被设备接受）";
+            return "✖ 隧道返回：" + firstLine;
+        } catch (Exception e) {
+            return "✖ 隧道异常：" + e.getClass().getSimpleName() + " " + (e.getMessage() == null ? "" : e.getMessage());
+        } finally {
+            if (s != null) try { s.close(); } catch (Exception ignored) { }
+            if (tunnel != null) tunnel.stop();
+        }
+    }
+
     private static long tcpLatency(String host, int port, int timeoutMs) {
         Socket s = null;
         long t0 = System.currentTimeMillis();
@@ -563,9 +613,21 @@ public class RtspProbe {
             if (rootVerdict == 1) {
                 credentialsValid = true;
                 r.append("  ✅ 账号密码确认正确（").append(rootDetail).append(" 认证后返回正常页面）\n");
+            } else if (rootVerdict == -1) {
+                r.append("  · 这台设备网页自己就不需要认证（直接 200），因此这一项无法验证密码，\n");
+                r.append("    密码对不对以上面的 RTSP 200 为准：能拿到 200 + SDP 就说明账号密码是对的。\n");
             } else {
-                r.append("  ✖ 首页也没通过认证 → 这台设备不认这套账号密码，或它用的不是 Basic/Digest\n");
+                r.append("  ✖ 首页认证后仍被拒 → 这台设备不认这套账号密码，或它用的不是 Basic/Digest\n");
             }
+        }
+
+        // 【3.6】Basic 注入隧道自检（这才是"App 里到底能不能播"的直接证据）
+        if (rtspPort > 0 && anyOk) {
+            String testPath = okPath == null ? PATHS[0] : okPath;
+            String t = tunnelSelfTest(host, rtspPort, testPath, user, pw, to);
+            r.append("\n【3.6】Basic 注入隧道自检\n  ").append(t).append("\n");
+            if (t.contains("✅")) r.append("  → 隧道可用，App 会自己走这条通道播放。\n");
+            else r.append("  → 隧道没通，把这段发给开发者，会改用直连方式。\n");
         }
 
         r.append("\n【4】结论\n");
