@@ -1,0 +1,15 @@
+# Gradle
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+captures/
+.cxx/
+
+# 签名证书原文（仓库里只保留 base64 文本，构建时自动还原）
+keystore/camview.jks
+*.jks
+!keystore/camview.jks.base64
+

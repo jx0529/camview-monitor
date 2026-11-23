@@ -1,0 +1,691 @@
+package com.camview.monitor;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.graphics.Color;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+import java.io.InputStream;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * 主界面：工具栏 + 单列摄像头列表（一屏一行）+ 状态栏。
+ * 列表按页显示，只有出现在屏幕上的摄像头才会真正开始解码（懒加载），
+ * 滚出屏幕的会自动暂停，所以手机上多路也不会卡。
+ */
+public class MainActivity extends Activity {
+
+    private static final int REQ_SETTINGS = 1001;
+    private static final int REQ_IMPORT = 1002;
+
+    private AppConfig cfg;
+    private final List<CameraRow> rows = new ArrayList<>();
+    private final Handler ui = new Handler(Looper.getMainLooper());
+
+    private LinearLayout toolbar;
+    private ScrollView listScroll;
+    private LinearLayout listContainer;
+    private TextView pageLabel, groupStats, statusBar, emptyView;
+    private TextView prevBtn, nextBtn;
+    private TextView groupChip;
+
+    private int lastRevision = -1;
+    private final SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
+
+    private final Runnable clockTask = new Runnable() {
+        @Override
+        public void run() {
+            updateStatusBar();
+            ui.postDelayed(this, 1000);
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        cfg = App.cfg();
+        setContentView(R.layout.activity_main);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        toolbar = findViewById(R.id.toolbar);
+        listScroll = (ScrollView) findViewById(R.id.listScroll);
+        listContainer = (LinearLayout) findViewById(R.id.listContainer);
+        pageLabel = (TextView) findViewById(R.id.pageLabel);
+        groupStats = (TextView) findViewById(R.id.groupStats);
+        statusBar = (TextView) findViewById(R.id.statusBar);
+        prevBtn = (TextView) findViewById(R.id.prevBtn);
+        nextBtn = (TextView) findViewById(R.id.nextBtn);
+
+        buildToolbar();
+
+        prevBtn.setOnClickListener(v -> prevPage());
+        nextBtn.setOnClickListener(v -> nextPage());
+
+        listScroll.setOnScrollChangeListener(new View.OnScrollChangeListener() {
+            @Override
+            public void onScrollChange(View v, int scrollX, int scrollY, int oldX, int oldY) {
+                updateVisibility();
+            }
+        });
+
+        renderPage();
+        lastRevision = cfg.revision;
+        ui.post(clockTask);
+
+        if (cfg.autoUpdate) {
+            ui.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    UpdateChecker.check(MainActivity.this, true);
+                }
+            }, 2500);
+        }
+    }
+
+    // ==================== 工具栏 ====================
+
+    private void buildToolbar() {
+        toolbar.removeAllViews();
+        groupChip = toolButton("📁 " + cfg.currentGroup, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showGroupDialog();
+            }
+        });
+        groupChip.setTextColor(0xFF58A6FF);
+        toolbar.addView(groupChip);
+
+        toolbar.addView(toolButton("📷 摄像头", v -> showCameraMenu()));
+        toolbar.addView(toolButton("🔃 排序", v -> showSortMenu()));
+        toolbar.addView(toolButton("⚙ 设置", v -> startActivityForResult(
+                new Intent(this, SettingsActivity.class), REQ_SETTINGS)));
+        toolbar.addView(toolButton("🔄 重启", v -> restartAll()));
+        toolbar.addView(toolButton("⋯ 更多", v -> showMoreMenu()));
+        toolbar.addView(toolButton("✕", v -> finish()));
+    }
+
+    private TextView toolButton(String text, View.OnClickListener listener) {
+        TextView b = new TextView(this);
+        b.setText(text);
+        b.setTextColor(0xFFC9D1D9);
+        b.setTextSize(13);
+        b.setGravity(Gravity.CENTER);
+        b.setBackgroundResource(R.drawable.bg_toolbar_button);
+        b.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 12), 0);
+        b.setClickable(true);
+        b.setFocusable(true);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(this, 36));
+        lp.rightMargin = Ui.dp(this, 6);
+        b.setLayoutParams(lp);
+        b.setOnClickListener(listener);
+        return b;
+    }
+
+    private void showCameraMenu() {
+        String[] items = {"➕ 添加单个摄像头", "➕➕ 批量添加摄像头", "🔍 扫描网段", "🗑 删除摄像头"};
+        Ui.actionSheet(this, "摄像头", items, (index, text) -> {
+            switch (index) {
+                case 0:
+                    addSingleCamera();
+                    break;
+                case 1:
+                    addBatchCamera();
+                    break;
+                case 2:
+                    startActivity(new Intent(this, ScanActivity.class));
+                    break;
+                case 3:
+                    deleteCameras();
+                    break;
+            }
+        });
+    }
+
+    private void showSortMenu() {
+        String[] items = {"当前组按 IP 排序", "所有组按 IP 排序", "分组名称排序"};
+        Ui.actionSheet(this, "排序", items, (index, text) -> {
+            switch (index) {
+                case 0:
+                    cfg.sortCurrentGroup();
+                    Ui.toast(this, "已按 IP 排序：" + cfg.currentGroup);
+                    break;
+                case 1:
+                    cfg.sortAllGroups();
+                    Ui.toast(this, "所有分组已按 IP 排序");
+                    break;
+                case 2:
+                    cfg.sortGroupsByName();
+                    Ui.toast(this, "分组已按名称排序");
+                    break;
+            }
+            refreshAll();
+        });
+    }
+
+    private void showMoreMenu() {
+        String[] items = {"重启所有摄像头", "检查更新", "导入电脑端配置", "关于 / 使用说明"};
+        Ui.actionSheet(this, "更多", items, (index, text) -> {
+            switch (index) {
+                case 0:
+                    restartAll();
+                    break;
+                case 1:
+                    UpdateChecker.check(this, false);
+                    break;
+                case 2:
+                    importConfig();
+                    break;
+                case 3:
+                    showAbout();
+                    break;
+            }
+        });
+    }
+
+    // ==================== 分组 ====================
+
+    private void showGroupDialog() {
+        final List<String> names = cfg.groupNames();
+        final String[] arr = names.toArray(new String[0]);
+        int checked = names.indexOf(cfg.currentGroup);
+
+        AlertDialog.Builder b = Ui.dialog(this);
+        b.setTitle("📁 分组管理");
+        b.setSingleChoiceItems(arr, checked, (dialog, which) -> {
+            String target = arr[which];
+            if (!target.equals(cfg.currentGroup)) {
+                cfg.currentGroup = target;
+                cfg.currentPage = 0;
+                cfg.save();
+                refreshAll();
+            }
+            dialog.dismiss();
+        });
+        b.setPositiveButton("新建", (d, w) -> newGroupDialog());
+        b.setNeutralButton("重命名", (d, w) -> renameGroupDialog());
+        b.setNegativeButton("删除", (d, w) -> deleteGroupDialog());
+        AlertDialog d = b.create();
+        Ui.styleDialog(d);
+        d.show();
+    }
+
+    private void newGroupDialog() {
+        LinearLayout box = Ui.column(this);
+        box.addView(Ui.title(this, "新建分组"));
+        final EditText input = Ui.input(this, "", "分组名称", false);
+        box.addView(input);
+        AlertDialog d = Ui.dialog(this).setView(box)
+                .setPositiveButton("创建", null)
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.setOnShowListener(dd -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String name = input.getText().toString().trim();
+            if (name.length() == 0) {
+                Ui.toast(this, "请输入分组名称");
+                return;
+            }
+            if (!cfg.addGroup(name)) {
+                Ui.toast(this, "分组已存在");
+                return;
+            }
+            cfg.currentGroup = name;
+            cfg.currentPage = 0;
+            cfg.save();
+            d.dismiss();
+            refreshAll();
+        }));
+        d.show();
+    }
+
+    private void renameGroupDialog() {
+        if (cfg.currentGroup.equals(AppConfig.DEFAULT_GROUP)) {
+            Ui.toast(this, "默认分组不能重命名");
+            return;
+        }
+        LinearLayout box = Ui.column(this);
+        box.addView(Ui.title(this, "重命名分组"));
+        final EditText input = Ui.input(this, cfg.currentGroup, "新名称", false);
+        box.addView(input);
+        AlertDialog d = Ui.dialog(this).setView(box)
+                .setPositiveButton("保存", null)
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.setOnShowListener(dd -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String name = input.getText().toString().trim();
+            if (!cfg.renameGroup(cfg.currentGroup, name)) {
+                Ui.toast(this, "名称无效或已存在");
+                return;
+            }
+            d.dismiss();
+            refreshAll();
+        }));
+        d.show();
+    }
+
+    private void deleteGroupDialog() {
+        if (cfg.currentGroup.equals(AppConfig.DEFAULT_GROUP)) {
+            Ui.toast(this, "默认分组不能删除");
+            return;
+        }
+        final String target = cfg.currentGroup;
+        new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle("删除分组")
+                .setMessage("确定删除分组「" + target + "」？\n该分组下的摄像头会移动到「默认分组」。")
+                .setPositiveButton("删除", (d, w) -> {
+                    cfg.deleteGroup(target);
+                    refreshAll();
+                    Ui.toast(this, "分组已删除");
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    // ==================== 添加 / 删除摄像头 ====================
+
+    private void addSingleCamera() {
+        LinearLayout box = Ui.column(this);
+        box.addView(Ui.title(this, "添加摄像头"));
+        box.addView(Ui.label(this, "IP 地址"));
+        final EditText ipIn = Ui.input(this, "", "例如 192.168.1.64", false);
+        ipIn.setInputType(InputType.TYPE_CLASS_TEXT);
+        box.addView(ipIn);
+        box.addView(Ui.label(this, "用户名（留空用默认：" + cfg.defaultUser + "）"));
+        final EditText userIn = Ui.input(this, "", cfg.defaultUser, false);
+        box.addView(userIn);
+        box.addView(Ui.label(this, "密码（留空用默认）"));
+        final EditText pwdIn = Ui.input(this, "", cfg.defaultPassword, true);
+        box.addView(pwdIn);
+        box.addView(Ui.label(this, "将添加到分组：" + cfg.currentGroup));
+
+        AlertDialog d = Ui.dialog(this).setView(box)
+                .setPositiveButton("添加", null)
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.setOnShowListener(dd -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String ip = ipIn.getText().toString().trim();
+            if (!NetUtil.isValidIp(ip)) {
+                Ui.toast(this, "IP 格式不正确");
+                return;
+            }
+            String user = userIn.getText().toString().trim();
+            String pwd = pwdIn.getText().toString().trim();
+            if (!cfg.addCamera(ip, user, pwd)) {
+                Ui.toast(this, "该摄像头已存在");
+                return;
+            }
+            d.dismiss();
+            cfg.currentPage = cfg.totalPages() - 1;
+            refreshAll();
+            Ui.toast(this, "已添加 " + ip);
+        }));
+        d.show();
+    }
+
+    private void addBatchCamera() {
+        LinearLayout box = Ui.column(this);
+        box.addView(Ui.title(this, "批量添加摄像头"));
+        box.addView(Ui.label(this, "IP 范围（支持 1-254、完整范围、/24 网段，多个用逗号分隔）"));
+        final EditText rangeIn = Ui.input(this, "", "192.168.31.88-120", false);
+        box.addView(rangeIn);
+        box.addView(Ui.label(this, "用户名（留空用默认）"));
+        final EditText userIn = Ui.input(this, "", cfg.defaultUser, false);
+        box.addView(userIn);
+        box.addView(Ui.label(this, "密码（留空用默认）"));
+        final EditText pwdIn = Ui.input(this, "", cfg.defaultPassword, true);
+        box.addView(pwdIn);
+
+        AlertDialog d = Ui.dialog(this).setView(box)
+                .setPositiveButton("批量添加", null)
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.setOnShowListener(dd -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String input = rangeIn.getText().toString().trim();
+            if (input.length() == 0) {
+                Ui.toast(this, "请输入 IP 范围");
+                return;
+            }
+            List<String> ips = NetUtil.expandInput(input, 2000);
+            if (ips.isEmpty()) {
+                Ui.toast(this, "IP 范围格式不正确");
+                return;
+            }
+            String user = userIn.getText().toString().trim();
+            String pwd = pwdIn.getText().toString().trim();
+            int added = cfg.addCameras(ips, user, pwd);
+            d.dismiss();
+            refreshAll();
+            Ui.toast(this, "成功添加 " + added + " 个摄像头");
+        }));
+        d.show();
+    }
+
+    private void deleteCameras() {
+        final List<String> all = cfg.allIps();
+        if (all.isEmpty()) {
+            Ui.toast(this, "系统中还没有摄像头");
+            return;
+        }
+        final String[] arr = all.toArray(new String[0]);
+        final boolean[] checked = new boolean[arr.length];
+        new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle("删除摄像头（可多选）")
+                .setMultiChoiceItems(arr, checked, (d, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton("删除选中", (d, w) -> {
+                    int n = 0;
+                    for (int i = 0; i < arr.length; i++) {
+                        if (checked[i]) {
+                            cfg.removeCamera(arr[i]);
+                            n++;
+                        }
+                    }
+                    refreshAll();
+                    Ui.toast(this, "已删除 " + n + " 个摄像头");
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    // ==================== 列表 / 分页 ====================
+
+    private void renderPage() {
+        for (CameraRow r : rows) {
+            listContainer.removeView(r);
+            r.destroy();
+        }
+        rows.clear();
+        listContainer.removeAllViews();
+
+        List<String> ips = cfg.pageCameras();
+        if (ips.isEmpty()) {
+            emptyView = new TextView(this);
+            emptyView.setText("还没有摄像头\n\n点击上方「📷 摄像头」添加，或「🔍 扫描网段」自动发现");
+            emptyView.setTextColor(0xFF8B949E);
+            emptyView.setTextSize(14);
+            emptyView.setGravity(Gravity.CENTER);
+            emptyView.setPadding(0, Ui.dp(this, 80), 0, 0);
+            listContainer.addView(emptyView, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        } else {
+            emptyView = null;
+        }
+
+        for (final String ip : ips) {
+            CameraInfo info = cfg.findCamera(ip);
+            if (info == null) info = cfg.getOrCreateCamera(ip);
+            CameraRow row = new CameraRow(this, cfg, info);
+            row.setOnClickListener(v -> openFullscreen(ip));
+            row.setOnLongClickListener(v -> {
+                showCameraItemMenu(row);
+                return true;
+            });
+            listContainer.addView(row, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            rows.add(row);
+        }
+
+        updatePageControls();
+        listScroll.post(new Runnable() {
+            @Override
+            public void run() {
+                listScroll.scrollTo(0, 0);
+                updateVisibility();
+            }
+        });
+    }
+
+    private void refreshAll() {
+        for (CameraRow r : rows) {
+            listContainer.removeView(r);
+            r.destroy();
+        }
+        rows.clear();
+        listContainer.removeAllViews();
+        if (groupChip != null) groupChip.setText("📁 " + cfg.currentGroup);
+        renderPage();
+        lastRevision = cfg.revision;
+    }
+
+    private void updatePageControls() {
+        int total = cfg.totalPages();
+        if (cfg.currentPage >= total) cfg.currentPage = total - 1;
+        if (cfg.currentPage < 0) cfg.currentPage = 0;
+        pageLabel.setText("第 " + (cfg.currentPage + 1) + " / " + total + " 页");
+        prevBtn.setEnabled(cfg.currentPage > 0);
+        prevBtn.setAlpha(cfg.currentPage > 0 ? 1f : 0.4f);
+        nextBtn.setEnabled(cfg.currentPage + 1 < total);
+        nextBtn.setAlpha(cfg.currentPage + 1 < total ? 1f : 0.4f);
+        groupStats.setText("本组 " + cfg.groupCameraCount() + " 个 · 总计 " + cfg.totalCameraCount() + " 个");
+        updateStatusBar();
+    }
+
+    private void prevPage() {
+        if (cfg.currentPage > 0) {
+            cfg.currentPage--;
+            renderPage();
+        }
+    }
+
+    private void nextPage() {
+        if (cfg.currentPage + 1 < cfg.totalPages()) {
+            cfg.currentPage++;
+            renderPage();
+        }
+    }
+
+    // ==================== 可见性（懒加载/自动暂停） ====================
+
+    private void updateVisibility() {
+        int sy = listScroll.getScrollY();
+        int vh = listScroll.getHeight();
+        int margin = Ui.dp(this, 120);
+        for (CameraRow row : rows) {
+            boolean visible = row.getBottom() > sy - margin && row.getTop() < sy + vh + margin;
+            if (row.stream.isActive() != visible) {
+                row.setRowActive(visible);
+            }
+        }
+        updateStatusBar();
+    }
+
+    private void updateStatusBar() {
+        int live = 0;
+        for (CameraRow r : rows) {
+            if (r.stream.state == CameraStream.ST_LIVE && r.stream.fps > 0.01f) live++;
+        }
+        String decode = cfg.hwDecode ? "硬件解码(MediaCodec)" : "软件解码";
+        if (cfg.hwDecode && ("cuda".equals(cfg.gpuMode) || "hardware".equals(cfg.gpuMode))) {
+            decode = "强制硬件解码";
+        }
+        statusBar.setText(decode + " · " + cfg.currentGroup + " · 活跃 " + live + "/" + rows.size()
+                + " · 总计 " + cfg.totalCameraCount() + " 个 · " + timeFmt.format(new Date()));
+    }
+
+    // ==================== 单路操作 ====================
+
+    private void openFullscreen(String ip) {
+        Intent i = new Intent(this, FullscreenActivity.class);
+        i.putExtra("ip", ip);
+        startActivity(i);
+    }
+
+    private void showCameraItemMenu(final CameraRow row) {
+        String[] items = {"🔍 放大画面", "📁 移动到分组", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转",
+                "♻ 重新连接", "🗑 删除摄像头"};
+        Ui.actionSheet(this, row.ip, items, (index, text) -> {
+            switch (index) {
+                case 0:
+                    openFullscreen(row.ip);
+                    break;
+                case 1:
+                    moveCameraDialog(row.ip);
+                    break;
+                case 2:
+                    chooseRotation(row);
+                    break;
+                case 3:
+                    row.stream.toggleFlipH();
+                    cfg.save();
+                    row.updateTag();
+                    break;
+                case 4:
+                    row.stream.toggleFlipV();
+                    cfg.save();
+                    row.updateTag();
+                    break;
+                case 5:
+                    row.stream.restart();
+                    Ui.toast(this, "正在重新连接 " + row.ip);
+                    break;
+                case 6:
+                    new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                            .setTitle("删除摄像头")
+                            .setMessage("确定删除 " + row.ip + " ？")
+                            .setPositiveButton("删除", (d, w) -> {
+                                cfg.removeCamera(row.ip);
+                                refreshAll();
+                            })
+                            .setNegativeButton("取消", null)
+                            .show();
+                    break;
+            }
+        });
+    }
+
+    private void chooseRotation(final CameraRow row) {
+        String[] items = {"0°", "90°", "180°", "270°"};
+        Ui.actionSheet(this, "旋转画面", items, (index, text) -> {
+            row.stream.setRotation(index * 90);
+            cfg.save();
+            row.updateTag();
+        });
+    }
+
+    private void moveCameraDialog(final String ip) {
+        List<String> groups = cfg.groupNames();
+        groups.remove(cfg.currentGroup);
+        if (groups.isEmpty()) {
+            Ui.toast(this, "没有其他分组，请先新建分组");
+            return;
+        }
+        final String[] arr = groups.toArray(new String[0]);
+        new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle("移动到分组")
+                .setItems(arr, (d, which) -> {
+                    cfg.moveCamera(ip, cfg.currentGroup, arr[which]);
+                    refreshAll();
+                    Ui.toast(this, "已移动 " + ip + " 到「" + arr[which] + "」");
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void restartAll() {
+        for (CameraRow r : rows) r.stream.restart();
+        Ui.toast(this, "正在重新连接所有摄像头…");
+    }
+
+    private void importConfig() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/plain", "text/*"});
+        try {
+            startActivityForResult(i, REQ_IMPORT);
+        } catch (Exception e) {
+            Ui.toast(this, "无法打开文件选择器");
+        }
+    }
+
+    private void showAbout() {
+        String ver = BuildConfig.VERSION_NAME;
+        String repo = cfg.githubRepo.length() == 0 ? "（未配置更新仓库）" : cfg.githubRepo;
+        String msg = "多路监控 v" + ver + "\n\n"
+                + "· 手机端采用单列布局，一行一路，滚出屏幕自动暂停解码，保证流畅。\n"
+                + "· GPU 加速：使用 MediaCodec 硬件解码（H.264/H.265），解码与上屏都走 GPU；"
+                + "设置里可切换「强制硬件 / 软件兼容」。\n"
+                + "· 支持分组管理、分页、批量添加、网段扫描、旋转翻转、放大画面（可拖动/双指缩放）。\n"
+                + "· 配置文件与电脑端 camera_system_config.json 字段一致，可从「更多 → 导入电脑端配置」迁移。\n\n"
+                + "更新仓库：" + repo;
+        new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle("关于 / 使用说明")
+                .setMessage(msg)
+                .setPositiveButton("知道了", null)
+                .setNeutralButton("检查更新", (d, w) -> UpdateChecker.check(this, false))
+                .show();
+    }
+
+    // ==================== 生命周期 ====================
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (cfg.revision != lastRevision) {
+            refreshAll();
+        } else {
+            listScroll.post(new Runnable() {
+                @Override
+                public void run() {
+                    updateVisibility();
+                }
+            });
+        }
+        ui.removeCallbacks(clockTask);
+        ui.post(clockTask);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        for (CameraRow r : rows) r.setRowActive(false);
+        ui.removeCallbacks(clockTask);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        ui.removeCallbacksAndMessages(null);
+        for (CameraRow r : rows) r.destroy();
+        rows.clear();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_IMPORT && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            Uri uri = data.getData();
+            try (InputStream in = getContentResolver().openInputStream(uri)) {
+                byte[] buf = new byte[65536];
+                int n;
+                StringBuilder sb = new StringBuilder();
+                while ((n = in.read(buf)) > 0) sb.append(new String(buf, 0, n, "UTF-8"));
+                String result = cfg.importFromJson(sb.toString());
+                refreshAll();
+                Ui.toast(this, result);
+            } catch (Exception e) {
+                Ui.toast(this, "导入失败：" + e.getMessage());
+            }
+        }
+    }
+}

@@ -1,0 +1,66 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 发布用的签名证书。仓库里保存的是 base64 文本（GitHub 只能提交文本），
+// 首次构建时自动还原成 keystore，保证后续版本的签名一致、可以覆盖安装。
+def ksFile = file("../keystore/camview.jks")
+def ksB64 = file("../keystore/camview.jks.base64")
+if (!ksFile.exists() && ksB64.exists()) {
+    ksFile.parentFile.mkdirs()
+    ksFile.bytes = java.util.Base64.getMimeDecoder().decode(ksB64.getText("UTF-8"))
+}
+
+android {
+    namespace 'com.camview.monitor'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.camview.monitor"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("../keystore/camview.jks")
+            storePassword "camview2026"
+            keyAlias "camview"
+            keyPassword "camview2026"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    implementation 'androidx.media3:media3-exoplayer:1.11.1'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.11.1'
+    implementation 'androidx.media3:media3-common:1.11.1'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.annotation:annotation:1.9.1'
+}

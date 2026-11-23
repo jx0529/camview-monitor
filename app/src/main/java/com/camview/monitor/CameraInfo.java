@@ -1,0 +1,48 @@
+package com.camview.monitor;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+/** 单个摄像头的配置数据（与桌面版 saved_cameras 结构保持兼容） */
+public class CameraInfo {
+    public String ip;
+    public String user;
+    public String password;
+    public int rotation = 0;
+    public boolean flipH = false;
+    public boolean flipV = false;
+    /** 仅内存字段：最近一次连接是否失败 */
+    public boolean lastFailed = false;
+
+    public CameraInfo(String ip, String user, String password) {
+        this.ip = ip;
+        this.user = user;
+        this.password = password;
+    }
+
+    public static CameraInfo fromJson(JSONObject o, String defUser, String defPwd) {
+        String ip = o.optString("ip", "");
+        if (ip.length() == 0) return null;
+        CameraInfo c = new CameraInfo(ip,
+                o.optString("user", defUser),
+                o.optString("password", defPwd));
+        c.rotation = o.optInt("rotation", 0);
+        c.flipH = o.optBoolean("flip_h", false);
+        c.flipV = o.optBoolean("flip_v", false);
+        return c;
+    }
+
+    public JSONObject toJson() {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("ip", ip);
+            o.put("user", user);
+            o.put("password", password);
+            o.put("rotation", rotation);
+            o.put("flip_h", flipH);
+            o.put("flip_v", flipV);
+        } catch (JSONException ignored) {
+        }
+        return o;
+    }
+}
