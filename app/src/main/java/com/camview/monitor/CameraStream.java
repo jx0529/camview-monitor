@@ -90,6 +90,10 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     /** 抓图模式下的实际帧率 */
     public volatile float snapFps = 0f;
 
+    // ---- Basic 认证注入隧道（设备只认 Basic、却抛 Digest 挑战时用）----
+    private RtspBasicTunnel tunnel;
+    private boolean tunnelTried = false;
+
     private final Runnable fpsTick = new Runnable() {
         @Override
         public void run() {
@@ -217,6 +221,10 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         releasePlayer();
         stopVlc();
         stopSnap();
+        if (tunnel != null) {
+            try { tunnel.stop(); } catch (Throwable ignored) { }
+            tunnel = null;
+        }
         textureView = null;
         holder = null;
     }
@@ -276,12 +284,61 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     private MediaSource buildSource() {
         String url = buildUrl();
+        if (useTunnel()) url = tunnelUrl(url);
         currentUrl = maskPassword(url);
         RtspMediaSource.Factory factory = new RtspMediaSource.Factory()
                 .setForceUseRtpTcp(useTcp)
                 .setTimeoutMs(Math.max(3000, Math.min(cfg.timeoutMs, 20000)))
                 .setUserAgent("CamView/1.0 Android");
         return factory.createMediaSource(MediaItem.fromUri(url));
+    }
+
+    /** 是否需要 Basic 注入隧道 */
+    private boolean useTunnel() {
+        return tunnelTried || "basic".equals(info.authMode);
+    }
+
+    /**
+     * 把 rtsp://user:pass@192.168.31.90:554/xxx 换成 rtsp://127.0.0.1:<隧道端口>/xxx
+     * 隧道会自动补 Authorization: Basic，并把响应里的设备地址改回本地地址。
+     */
+    private String tunnelUrl(String rendered) {
+        try {
+            Uri u = Uri.parse(rendered);
+            int port = u.getPort() > 0 ? u.getPort() : 554;
+            String path = u.getEncodedPath();
+            if (path == null || path.isEmpty()) path = "/";
+            String query = u.getEncodedQuery();
+            if (tunnel == null || !tunnel.isRunning()) {
+                if (tunnel != null) tunnel.stop();
+                tunnel = new RtspBasicTunnel(info.ip, port, info.user, info.password);
+                int lp = tunnel.start();
+                if (lp <= 0) {
+                    tunnel = null;
+                    return rendered;
+                }
+            }
+            return "rtsp://127.0.0.1:" + tunnel.localPort + path
+                    + (query != null ? "?" + query : "");
+        } catch (Throwable t) {
+            Log.w(TAG, info.ip + " 隧道地址生成失败: " + t);
+            return rendered;
+        }
+    }
+
+    /** 手动切换认证方式（"" 自动 / "basic" 隧道） */
+    public void setAuthMode(String mode) {
+        info.authMode = mode == null ? "" : mode;
+        tunnelTried = "basic".equals(info.authMode);
+        lastError = "";
+        retryCount = 0;
+        templateIndex = 0;
+        state = ST_CONNECTING;
+        handler.removeCallbacks(reconnectTask);
+        vlcMode = false;
+        stopVlc();
+        releasePlayer();
+        if (textureView != null) startPlayer();
     }
 
     private static String maskPassword(String url) {
@@ -405,7 +462,21 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     private void handleFailure() {
         if (released) return;
-        // 海康/大华的 Digest 认证 Media3 解不了，直接切 VLC 通道
+        // ① 认证类错误：先试「Basic 注入隧道」（很多设备只认 Basic、却抛 Digest 挑战）
+        if (!vlcMode && !tunnelTried && isAuthProblem(lastError)) {
+            tunnelTried = true;
+            retryCount = 0;
+            templateIndex = 0;
+            useTcp = cfg.rtspTcp;
+            lastError = "";
+            releasePlayer();
+            handler.removeCallbacks(reconnectTask);
+            state = ST_CONNECTING;
+            Log.i(TAG, info.ip + " 认证失败 → 改用 Basic 注入隧道重试");
+            handler.postDelayed(reconnectTask, 300);
+            return;
+        }
+        // ② 还是认证不过：切 VLC 通道
         if (!vlcMode && isAuthProblem(lastError)) {
             vlcMode = true;
             retryCount = 0;

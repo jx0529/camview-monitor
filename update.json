@@ -1,6 +1,6 @@
 {
-  "version": "1.0.6",
-  "notes": "账号密码自动清洗(换行/空格/全角/零宽字符)+自检报告；新增网页根路径验证密码；支持自定义抓图地址",
-  "apk_path": "release/camview-monitor-1.0.6.apk",
-  "size": 23738930
+  "version": "1.0.7",
+  "notes": "新增 Basic 认证注入隧道：设备只认 Basic 却抛 Digest 挑战时，自动本地转发补认证头，Media3 可直接出画面",
+  "apk_path": "release/camview-monitor-1.0.7.apk",
+  "size": 23743846
 }

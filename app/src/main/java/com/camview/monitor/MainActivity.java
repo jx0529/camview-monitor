@@ -595,7 +595,7 @@ public class MainActivity extends Activity {
 
     private void showCameraItemMenu(final CameraRow row) {
         String[] items = {"🔍 放大画面", "🩺 连接诊断（连不上先点这个）", "📷 网页抓图模式（从 HTTP 拉图）",
-                "📁 移动到分组", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转", "♻ 重新连接", "🗑 删除摄像头", "🔗 自定义抓图地址"};
+                "📁 移动到分组", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转", "♻ 重新连接", "🗑 删除摄像头", "🔗 自定义抓图地址", "🔐 强制 Basic 认证（隧道）"};
         Ui.actionSheet(this, row.ip, items, (index, text) -> {
             switch (index) {
                 case 0:
@@ -642,6 +642,13 @@ public class MainActivity extends Activity {
                 case 9:
                     customSnapUrl(row);
                     break;
+                case 10:
+                    boolean on = "basic".equals(row.info.authMode);
+                    row.info.authMode = on ? "" : "basic";
+                    cfg.save();
+                    row.stream.setAuthMode(row.info.authMode);
+                    Ui.toast(this, on ? "已关闭 Basic 隧道，改回自动" : "已启用 Basic 隧道（设备只认 Basic 时用）");
+                    break;
             }
         });
     }
@@ -684,8 +691,11 @@ public class MainActivity extends Activity {
         tpls.remove(tpl);
         tpls.add(0, tpl);
         cfg.rtspTemplates = tpls;
+        if (RtspProbe.workingBasic) {
+            row.info.authMode = "basic";
+        }
         cfg.save();
-        row.stream.restart();
+        row.stream.setAuthMode(row.info.authMode == null ? "" : row.info.authMode);
         Ui.toast(this, "已设为第一优先地址，正在重连：" + row.ip);
     }
 

@@ -13,6 +13,8 @@ public class CameraInfo {
     public boolean flipV = false;
     /** 网页抓图模式用到的 HTTP 抓图地址（探测出来后自动记住） */
     public String snapUrl = "";
+    /** 认证方式："" 自动 / "basic" 强制走 Basic 注入隧道 */
+    public String authMode = "";
     /** 仅内存字段：最近一次连接是否失败 */
     public boolean lastFailed = false;
 
@@ -32,6 +34,7 @@ public class CameraInfo {
         c.flipH = o.optBoolean("flip_h", false);
         c.flipV = o.optBoolean("flip_v", false);
         c.snapUrl = o.optString("snap_url", "");
+        c.authMode = o.optString("auth_mode", "");
         return c;
     }
 
@@ -45,6 +48,7 @@ public class CameraInfo {
             o.put("flip_h", flipH);
             o.put("flip_v", flipV);
             if (snapUrl != null && !snapUrl.isEmpty()) o.put("snap_url", snapUrl);
+            if (authMode != null && !authMode.isEmpty()) o.put("auth_mode", authMode);
         } catch (JSONException ignored) {
         }
         return o;

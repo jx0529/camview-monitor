@@ -48,6 +48,8 @@ public class RtspProbe {
 
     /** 探测到的可用抓图地址（用于「网页抓图模式」） */
     public static volatile String workingSnap = null;
+    /** 设备只认 Basic 认证（Digest 挑战是假的）→ 播放要走 Basic 注入隧道 */
+    public static volatile boolean workingBasic = false;
 
     /** 探测成功后的可用模板（内含 {user}/{password}/{ip} 占位符），失败为 null */
     public static volatile String workingTemplate = null;
@@ -288,7 +290,10 @@ public class RtspProbe {
         String basic = "Basic " + android.util.Base64.encodeToString(
                 (user + ":" + password).getBytes(), android.util.Base64.NO_WRAP);
         Resp c = fetch(host, port, buildRtspRequest("DESCRIBE", uri, 3, basic), timeoutMs);
-        if (c.code == 200 || c.code == 201) return describe(c) + "（Basic 认证）";
+        if (c.code == 200 || c.code == 201) {
+            workingBasic = true;
+            return describe(c) + "（Basic 认证）";
+        }
         if (c.code > 0 && c.code != 401) return c.code + " " + c.reason;
         return last;
     }
@@ -440,6 +445,7 @@ public class RtspProbe {
         challenge = "";
         credentialsValid = false;
         workingSnap = null;
+        workingBasic = false;
         StringBuilder r = new StringBuilder();
         r.append("目标: ").append(host.isEmpty() ? "(空)" : host).append("\n");
         String pw = password == null ? "" : password;
@@ -565,6 +571,10 @@ public class RtspProbe {
         r.append("\n【4】结论\n");
         if (anyOk) {
             r.append("  ✅ RTSP 通路正常：").append(okPath).append(" → ").append(okDesc).append("\n\n");
+            if (workingBasic) {
+                r.append("  ! 这台设备只认 Basic 认证（Digest 挑战是假的）：App 会自动走 Basic 注入隧道，\n");
+                r.append("    点「一键用这个地址」后它就会用隧道播放，不用再改设备设置。\n\n");
+            }
             r.append("  App 里如果还是不出画面：\n");
             r.append("  1) 点「一键用这个地址」把它设为第一优先；\n");
             r.append("  2) 解码模式改「软件兼容」，每页数量改 4；\n");
