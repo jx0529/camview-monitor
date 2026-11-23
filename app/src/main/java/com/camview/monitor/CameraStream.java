@@ -247,7 +247,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     private void startPlayer() {
         if (released || textureView == null) return;
-        if (vlcMode) {
+        if (vlcMode || isBasicMode()) {
+            vlcMode = true;
             startVlc();
             return;
         }
@@ -293,6 +294,11 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         return factory.createMediaSource(MediaItem.fromUri(url));
     }
 
+    /** 设备只认 Basic（诊断确认后写进配置）→ 播放直接走 VLC + 隧道，最稳 */
+    private boolean isBasicMode() {
+        return "basic".equals(info.authMode);
+    }
+
     /** 是否需要 Basic 注入隧道 */
     private boolean useTunnel() {
         return tunnelTried || "basic".equals(info.authMode);
@@ -311,7 +317,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
             String query = u.getEncodedQuery();
             if (tunnel == null || !tunnel.isRunning()) {
                 if (tunnel != null) tunnel.stop();
-                tunnel = new RtspBasicTunnel(info.ip, port, info.user, info.password);
+                tunnel = new RtspBasicTunnel(info.ip, port, info.user, info.password, true);
                 int lp = tunnel.start();
                 if (lp <= 0) {
                     tunnel = null;
@@ -693,9 +699,12 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
             IVLCVout vout = p.getVLCVout();
             vout.setVideoView(textureView);
             vout.attachViews();
-            Media m = new Media(libVlc, Uri.parse(buildUrl()));
+            String vurl = buildUrl();
+            if (useTunnel()) vurl = tunnelUrl(vurl);
+            Log.i(TAG, info.ip + " VLC 地址: " + maskPassword(vurl));
+            Media m = new Media(libVlc, Uri.parse(vurl));
             m.setHWDecoderEnabled(cfg.hwDecode, false);
-            if (cfg.rtspTcp) m.addOption(":rtsp-tcp");
+            if (cfg.rtspTcp || useTunnel()) m.addOption(":rtsp-tcp");
             m.addOption(":network-caching=300");
             p.setEventListener(new MediaPlayer.EventListener() {
                 @Override

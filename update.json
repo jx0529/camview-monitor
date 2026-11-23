@@ -1,6 +1,6 @@
 {
-  "version": "1.0.8",
-  "notes": "诊断新增[Basic注入隧道自检]，直接验证App能否出画面；修正网页无需认证时的密码误判",
-  "apk_path": "release/camview-monitor-1.0.8.apk",
-  "size": 23744874
+  "version": "1.0.9",
+  "notes": "Basic 认证设备改为 VLC(ffmpeg内核)+隧道播放；隧道支持强制替换 Digest 为 Basic",
+  "apk_path": "release/camview-monitor-1.0.9.apk",
+  "size": 23744914
 }

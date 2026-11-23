@@ -35,6 +35,8 @@ public class RtspBasicTunnel {
     private final String camHost;
     private final int camPort;
     private final String authHeader;
+    /** true = 把请求里自带的 Authorization 换成我们的 Basic（VLC 会先发 Digest，必须替换） */
+    private final boolean replaceAuth;
 
     private ServerSocket server;
     private Thread acceptThread;
@@ -43,6 +45,11 @@ public class RtspBasicTunnel {
     public int localPort = -1;
 
     public RtspBasicTunnel(String camHost, int camPort, String user, String password) {
+        this(camHost, camPort, user, password, false);
+    }
+
+    public RtspBasicTunnel(String camHost, int camPort, String user, String password, boolean replaceAuth) {
+        this.replaceAuth = replaceAuth;
         this.camHost = camHost;
         this.camPort = camPort <= 0 ? 554 : camPort;
         String u = Creds.clean(user);
@@ -193,14 +200,16 @@ public class RtspBasicTunnel {
                     int end = indexOf(data, CRLF2, 0);
                     if (end < 0) break;
                     String head = new String(data, 0, end, "UTF-8");
-                    String lower = head.toLowerCase();
-                    String out;
-                    if (lower.contains("authorization:") || lower.startsWith("rtsp/")) {
-                        out = head + "\r\n\r\n";
-                    } else {
-                        // 在空行前插入认证头
-                        out = head + "\r\n" + authHeader + "\r\n";
+                    StringBuilder clean = new StringBuilder();
+                    for (String line : head.split("\r\n")) {
+                        if (line.toLowerCase().startsWith("authorization:")) {
+                            if (!replaceAuth) clean.append(line).append("\r\n");
+                            // replaceAuth 时直接丢掉，换成我们的 Basic
+                        } else {
+                            clean.append(line).append("\r\n");
+                        }
                     }
+                    String out = clean.toString() + authHeader + "\r\n";
                     os.write(out.getBytes("UTF-8"));
                     os.flush();
                     data = tail(data, end + 4);
