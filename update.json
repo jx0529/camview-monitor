@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "notes": "首个 Android 手机版：单列懒加载、MediaCodec 硬件解码、分组/分页/扫描/旋转翻转/全屏缩放，内置在线更新。",
+  "apk_path": "release/camview-monitor-1.0.0.apk",
+  "size": 3746377
+}
