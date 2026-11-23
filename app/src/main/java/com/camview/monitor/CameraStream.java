@@ -415,6 +415,20 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
             state = ST_CONNECTING;
             handler.postDelayed(reconnectTask, 1200);
         } else {
+            // 所有模板 + 两种协议都过完了还不通：交给 VLC 兼容通道再试一次
+            // （它支持完整的 Digest(qop) 认证，海康这类设备常见只认这个）
+            if (!vlcMode) {
+                vlcMode = true;
+                retryCount = 0;
+                templateIndex = 0;
+                useTcp = cfg.rtspTcp;
+                lastError = "";
+                releasePlayer();
+                stopVlc();
+                handler.removeCallbacks(reconnectTask);
+                startVlc();
+                return;
+            }
             scheduleReconnect();
         }
     }

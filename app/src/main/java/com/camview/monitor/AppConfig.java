@@ -263,6 +263,16 @@ public class AppConfig {
         save();
     }
 
+    /** 修改某台摄像头的账号密码 */
+    public synchronized void setCameraCredentials(String ip, String user, String password) {
+        CameraInfo c = findCamera(ip);
+        if (c == null) return;
+        c.user = user == null ? "" : user;
+        c.password = password == null ? "" : password;
+        revision++;
+        save();
+    }
+
     /** 删除全部摄像头（分组名称保留，摄像头配置清空） */
     public synchronized int clearAllCameras() {
         int n = totalCameraCount();

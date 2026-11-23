@@ -1,6 +1,6 @@
 {
-  "version": "1.0.3",
-  "notes": "修复海康/大华 Digest(qop) 认证导致的黑屏：手机内置播放器(Media3)不支持这种认证写法，现在认证失败会自动切到 VLC 兼容通道播放（支持 H.264/H.265、TCP/UDP）。同时新增「删除全部摄像头」（二次确认）。",
-  "apk_path": "release/camview-monitor-1.0.3.apk",
-  "size": 23727750
+  "version": "1.0.4",
+  "notes": "修复：认证诊断可按密码重测并自动保存；全部失败自动切 VLC 兼容通道；新增[删除全部摄像头]二次确认",
+  "apk_path": "release/camview-monitor-1.0.4.apk",
+  "size": 23730550
 }

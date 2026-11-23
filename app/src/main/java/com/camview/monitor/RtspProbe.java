@@ -15,16 +15,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * RTSP 连接诊断：不依赖播放器，直接用 socket 发 OPTIONS / DESCRIBE，
- * 把"端口通不通、认证方式、路径对不对、编码是什么"逐条打印出来。
- * 用于定位"网页能看、App 连不上"这类问题。
+ * 连接诊断：不依赖播放器，直接用 socket 发 DESCRIBE / HTTP GET，
+ * 把"端口通不通、认证方式、账号对不对、路径对不对、编码是什么"逐条打印出来。
+ *
+ * 解决"网页能看、App 连不上"：RTSP 401 分两种原因——
+ *  ① 密码不对；② 这台设备的 Digest 写法特殊（要求 uri 只带路径、带/不带 algorithm 等）。
+ * 这里会逐个变体重试，并用 HTTP 快照接口单独验证账号密码，从而把两种原因区分开。
  */
 public class RtspProbe {
-
-    /** 探测成功后的可用模板（内含 {user}/{password}/{ip} 占位符），失败为 null */
-    public static volatile String workingTemplate = null;
-    /** 设备返回的 WWW-Authenticate 认证方式（用于判断 Media3 是否支持） */
-    public static volatile String challenge = "";
 
     private static final int[] PORTS = {554, 8554, 10554, 80, 8000};
     private static final String[] PATHS = {
@@ -34,6 +32,18 @@ public class RtspProbe {
             "/onvif1",
             "/h264"
     };
+    /** 典型 HTTP 快照接口，用来验证账号密码是否正确 */
+    private static final String[] HTTP_PATHS = {
+            "/ISAPI/Streaming/channels/101/picture",
+            "/cgi-bin/snapshot.cgi?channel=1"
+    };
+
+    /** 探测成功后的可用模板（内含 {user}/{password}/{ip} 占位符），失败为 null */
+    public static volatile String workingTemplate = null;
+    /** 设备返回的 WWW-Authenticate 认证方式 */
+    public static volatile String challenge = "";
+    /** HTTP 接口是否认证成功（true = 密码没问题，问题在 RTSP 写法） */
+    public static volatile boolean credentialsValid = false;
 
     /** 从用户输入里抠出纯 IP / 主机名（允许整段 http://ip/doc/page/preview.asp 直接粘贴） */
     public static String normalizeHost(String raw) {
@@ -77,7 +87,7 @@ public class RtspProbe {
         try {
             socket = new Socket();
             socket.connect(new InetSocketAddress(host, port), timeoutMs);
-            socket.setSoTimeout(1200);
+            socket.setSoTimeout(1000);
             OutputStream out = socket.getOutputStream();
             out.write(requestText.getBytes("UTF-8"));
             out.flush();
@@ -94,12 +104,11 @@ public class RtspProbe {
                 }
                 if (n <= 0) break;
                 buf.write(tmp, 0, n);
-                if (buf.size() > 200 * 1024) break;
+                if (buf.size() > 400 * 1024) break;
                 String soFar = buf.toString("UTF-8");
                 int hdrEnd = soFar.indexOf("\r\n\r\n");
-                if (hdrEnd > 0 && soFar.startsWith("RTSP/")) {
-                    // 已经有头，且读到一段内容后还等不到更多数据就收工
-                    if (soFar.length() - hdrEnd > 200) break;
+                if (hdrEnd > 0 && (soFar.startsWith("RTSP/") || soFar.startsWith("HTTP/")) && soFar.length() - hdrEnd > 400) {
+                    break;
                 }
             }
             r.raw = buf.toString("UTF-8");
@@ -118,12 +127,10 @@ public class RtspProbe {
         String[] lines = r.raw.split("\r\n");
         if (lines.length == 0) return;
         String status = lines[0];
-        if (status.startsWith("RTSP/")) {
+        if (status.startsWith("RTSP/") || status.startsWith("HTTP/")) {
             String[] parts = status.split(" ", 3);
             if (parts.length >= 2) {
-                try {
-                    r.code = Integer.parseInt(parts[1].trim());
-                } catch (Exception ignored) { }
+                try { r.code = Integer.parseInt(parts[1].trim()); } catch (Exception ignored) { }
             }
             if (parts.length >= 3) r.reason = parts[2];
         }
@@ -145,89 +152,51 @@ public class RtspProbe {
 
     private static Map<String, String> parseKv(String s) {
         Map<String, String> m = new LinkedHashMap<>();
-        Matcher mt = Pattern.compile("([a-zA-Z0-9_-]+)\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^,\\s]+)").matcher(s == null ? "" : s);
+        Matcher mt = Pattern.compile("([a-zA-Z0-9_-]+)\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^,\\s]+)")
+                .matcher(s == null ? "" : s);
         while (mt.find()) {
             String v = mt.group(2);
-            if (v.length() > 1 && (v.startsWith("\"") || v.startsWith("'"))) {
-                v = v.substring(1, v.length() - 1);
-            }
+            if (v.length() > 1 && (v.startsWith("\"") || v.startsWith("'"))) v = v.substring(1, v.length() - 1);
             m.put(mt.group(1).toLowerCase(Locale.US), v);
         }
         return m;
     }
 
-    /** 生成认证头（支持 Basic / Digest MD5），失败返回 null */
-    private static String authHeader(String challenge, String user, String password,
-                                     String method, String uri) {
-        if (challenge == null || challenge.isEmpty()) return null;
-        String scheme = challenge.trim().split(" ")[0].toLowerCase(Locale.US);
+    /** 生成认证头（Basic / Digest MD5） */
+    private static String authHeader(String challengeText, String user, String password,
+                                     String method, String uri, boolean withAlgorithm) {
+        if (challengeText == null || challengeText.isEmpty()) return null;
+        String scheme = challengeText.trim().split(" ")[0].toLowerCase(Locale.US);
         if (scheme.equals("basic")) {
             String v = user + ":" + password;
-            String b64 = android.util.Base64.encodeToString(v.getBytes(),
-                    android.util.Base64.NO_WRAP);
-            return "Basic " + b64;
+            return "Basic " + android.util.Base64.encodeToString(v.getBytes(), android.util.Base64.NO_WRAP);
         }
-        if (scheme.equals("digest")) {
-            Map<String, String> p = parseKv(challenge);
-            String realm = p.get("realm") != null ? p.get("realm") : "";
-            String nonce = p.get("nonce") != null ? p.get("nonce") : "";
-            String qop = p.get("qop");
-            String opaque = p.get("opaque");
-            String cnonce = md5(String.valueOf(System.currentTimeMillis())).substring(0, 16);
-            String nc = "00000001";
-            String ha1 = md5(user + ":" + realm + ":" + password);
-            String ha2 = md5(method + ":" + uri);
-            String response;
-            if (qop != null && qop.toLowerCase(Locale.US).contains("auth")) {
-                response = md5(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":auth:" + ha2);
-            } else {
-                response = md5(ha1 + ":" + nonce + ":" + ha2);
-            }
-            StringBuilder sb = new StringBuilder();
-            sb.append("Digest username=\"").append(user).append("\"");
-            sb.append(", realm=\"").append(realm).append("\"");
-            sb.append(", nonce=\"").append(nonce).append("\"");
-            sb.append(", uri=\"").append(uri).append("\"");
-            sb.append(", algorithm=MD5");
-            sb.append(", response=\"").append(response).append("\"");
-            if (qop != null && qop.toLowerCase(Locale.US).contains("auth")) {
-                sb.append(", qop=auth, nc=").append(nc).append(", cnonce=\"").append(cnonce).append("\"");
-            }
-            if (opaque != null) sb.append(", opaque=\"").append(opaque).append("\"");
-            return sb.toString();
-        }
-        return null;
-    }
-
-    private static String buildRequest(String method, String uri, int cseq, String auth) {
+        if (!scheme.equals("digest")) return null;
+        Map<String, String> p = parseKv(challengeText);
+        String realm = p.containsKey("realm") ? p.get("realm") : "";
+        String nonce = p.containsKey("nonce") ? p.get("nonce") : "";
+        String qop = p.get("qop");
+        String opaque = p.get("opaque");
+        String cnonce = md5(String.valueOf(System.currentTimeMillis())).substring(0, 16);
+        String nc = "00000001";
+        String ha1 = md5(user + ":" + realm + ":" + password);
+        String ha2 = md5(method + ":" + uri);
+        boolean useQop = qop != null && qop.toLowerCase(Locale.US).contains("auth");
+        String response = useQop
+                ? md5(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":auth:" + ha2)
+                : md5(ha1 + ":" + nonce + ":" + ha2);
         StringBuilder sb = new StringBuilder();
-        sb.append(method).append(" ").append(uri).append(" RTSP/1.0\r\n");
-        sb.append("CSeq: ").append(cseq).append("\r\n");
-        sb.append("User-Agent: CamViewProbe/1.0\r\n");
-        if (auth != null) sb.append("Authorization: ").append(auth).append("\r\n");
-        sb.append("\r\n");
-        return sb.toString();
-    }
-
-    /** DESCRIBE 一个路径，自动处理一次 401 认证 */
-    private static String describePath(String host, int port, String uri, String user, String password,
-                                       int timeoutMs) {
-        Resp a = fetch(host, port, buildRequest("DESCRIBE", uri, 1, null), timeoutMs);
-        if (a.code == 401 && a.wwwAuth != null && !a.wwwAuth.isEmpty()) {
-            if (challenge.isEmpty()) challenge = a.wwwAuth.split("\\|")[0].trim();
-            String auth = authHeader(a.wwwAuth.split("\\|")[0], user, password, "DESCRIBE", uri);
-            if (auth != null) {
-                Resp b = fetch(host, port, buildRequest("DESCRIBE", uri, 2, auth), timeoutMs);
-                return describe(b);
-            }
-            return "401 需要认证（" + a.wwwAuth.split("\\|")[0].trim()
-                    + "），请确认用户名/密码";
+        sb.append("Digest username=\"").append(user).append('"');
+        sb.append(", realm=\"").append(realm).append('"');
+        sb.append(", nonce=\"").append(nonce).append('"');
+        sb.append(", uri=\"").append(uri).append('"');
+        if (withAlgorithm) sb.append(", algorithm=MD5");
+        sb.append(", response=\"").append(response).append('"');
+        if (useQop) {
+            sb.append(", qop=auth, nc=").append(nc).append(", cnonce=\"").append(cnonce).append('"');
         }
-        if (a.code == 404) return "404 路径不存在";
-        if (a.code == 401) return "401 未授权（服务器没给认证头）";
-        if (a.code <= 0) return "无响应（" + a.reason + "）";
-        if (a.code == 200 || a.code == 201) return describe(a);
-        return a.code + " " + a.reason;
+        if (opaque != null) sb.append(", opaque=\"").append(opaque).append('"');
+        return sb.toString();
     }
 
     private static String describe(Resp r) {
@@ -235,7 +204,6 @@ public class RtspProbe {
         if (r.code == 401) return "401 认证失败（用户名或密码不正确）";
         if (r.code == 404) return "404 路径不存在";
         if (r.code != 200 && r.code != 201) return r.code + " " + r.reason;
-        // 解析 SDP
         String codec = "";
         String fps = "";
         String extra = "";
@@ -246,11 +214,11 @@ public class RtspProbe {
             } else if (t.startsWith("a=rtpmap")) {
                 int c = t.indexOf(' ');
                 if (c > 0) {
-                    String v = t.substring(c).trim();
-                    if (v.toUpperCase(Locale.US).startsWith("H264")) codec = "H.264";
-                    else if (v.toUpperCase(Locale.US).startsWith("H265")) codec = "H.265(HEVC)";
-                    else if (v.toUpperCase(Locale.US).startsWith("JPEG")) codec = "MJPEG";
-                    else if (v.toUpperCase(Locale.US).startsWith("MP4V")) codec = "MPEG-4";
+                    String v = t.substring(c).trim().toUpperCase(Locale.US);
+                    if (v.startsWith("H264")) codec = "H.264";
+                    else if (v.startsWith("H265")) codec = "H.265(HEVC)";
+                    else if (v.startsWith("JPEG")) codec = "MJPEG";
+                    else if (v.startsWith("MP4V")) codec = "MPEG-4";
                     else if (codec.isEmpty()) codec = v;
                 }
             } else if (t.startsWith("a=framerate")) {
@@ -264,6 +232,112 @@ public class RtspProbe {
         if (!extra.isEmpty()) sb.append(" · ").append(extra);
         if (r.body.isEmpty()) sb.append(" · （返回空 SDP）");
         return sb.toString();
+    }
+
+    /**
+     * DESCRIBE 一个路径；401 时用 4 种 Digest 写法重试
+     * （uri 完整/仅路径 × 带/不带 algorithm），有的设备只认其中一种。
+     */
+    private static String describePath(String host, int port, String uri, String user, String password,
+                                       int timeoutMs) {
+        Resp a = fetch(host, port, buildRtspRequest("DESCRIBE", uri, 1, null), timeoutMs);
+        if (a.code <= 0) return "无响应（" + a.reason + "）";
+        if (a.code == 404) return "404 路径不存在";
+        if (a.code != 401) return describe(a);
+        if (a.wwwAuth == null || a.wwwAuth.isEmpty()) return "401 未授权（服务器没给认证头）";
+        String ch = a.wwwAuth.split("\\|")[0].trim();
+        if (challenge.isEmpty()) challenge = ch;
+
+        int schemeEnd = uri.indexOf("://");
+        int pathStart = schemeEnd < 0 ? -1 : uri.indexOf('/', schemeEnd + 3);
+        String pathOnly = pathStart > 0 ? uri.substring(pathStart) : uri;
+
+        String last = "401 认证失败（用户名或密码不正确）";
+        String[][] variants = {
+                {uri, "", "alg"},
+                {uri, "", "noalg"},
+                {pathOnly, "（认证用仅路径）", "alg"},
+                {pathOnly, "（认证用仅路径）", "noalg"}
+        };
+        for (String[] v : variants) {
+            String auth = authHeader(ch, user, password, "DESCRIBE", v[0], "alg".equals(v[2]));
+            if (auth == null) continue;
+            Resp b = fetch(host, port, buildRtspRequest("DESCRIBE", uri, 2, auth), timeoutMs);
+            if (b.code == 200 || b.code == 201) return describe(b) + v[1];
+            if (b.code == 401) {
+                last = "401 认证失败（用户名或密码不正确）";
+            } else if (b.code <= 0) {
+                last = "无响应（" + b.reason + "）";
+            } else {
+                return b.code + " " + b.reason;
+            }
+        }
+        // 有些海康设备实际只接受 Basic（网页里 安全管理→认证方式→RTSP认证 设 Basic 后），
+        // 但 401 里仍然只给 Digest 挑战，所以要主动试一次 Basic
+        String basic = "Basic " + android.util.Base64.encodeToString(
+                (user + ":" + password).getBytes(), android.util.Base64.NO_WRAP);
+        Resp c = fetch(host, port, buildRtspRequest("DESCRIBE", uri, 3, basic), timeoutMs);
+        if (c.code == 200 || c.code == 201) return describe(c) + "（Basic 认证）";
+        if (c.code > 0 && c.code != 401) return c.code + " " + c.reason;
+        return last;
+    }
+
+    private static String buildRtspRequest(String method, String uri, int cseq, String auth) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(method).append(' ').append(uri).append(" RTSP/1.0\r\n");
+        sb.append("CSeq: ").append(cseq).append("\r\n");
+        sb.append("Accept: application/sdp\r\n");
+        sb.append("User-Agent: CamViewProbe/1.0\r\n");
+        if (auth != null) sb.append("Authorization: ").append(auth).append("\r\n");
+        sb.append("\r\n");
+        return sb.toString();
+    }
+
+    private static String buildHttpGet(String path, String host, String auth) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("GET ").append(path).append(" HTTP/1.0\r\n");
+        sb.append("Host: ").append(host).append("\r\n");
+        sb.append("User-Agent: CamViewProbe/1.0\r\n");
+        if (auth != null) sb.append("Authorization: ").append(auth).append("\r\n");
+        sb.append("\r\n");
+        return sb.toString();
+    }
+
+    /** 用 HTTP 快照接口验证账号密码（顺便看能不能直接拿图） */
+    private static String httpCredentialCheck(String host, int port, String path,
+                                              String user, String password, int timeoutMs) {
+        Resp a = fetch(host, port, buildHttpGet(path, host, null), timeoutMs);
+        if (a.code <= 0) return "无响应";
+        if (a.code != 401) {
+            String len = a.headers.get("content-length");
+            return a.code + " " + (a.reason == null ? "" : a.reason) + (len != null ? " · " + len + "B" : "");
+        }
+        if (a.wwwAuth == null || a.wwwAuth.isEmpty()) return "401 无认证头";
+        String ch = a.wwwAuth.split("\\|")[0].trim();
+        if (challenge.isEmpty()) challenge = ch;
+        String auth = authHeader(ch, user, password, "GET", path, true);
+        if (auth == null) return "401（不支持的认证方式）";
+        Resp b = fetch(host, port, buildHttpGet(path, host, auth), timeoutMs);
+        if (b.code == 200 || b.code == 201) {
+            String type = b.headers.get("content-type");
+            String len = b.headers.get("content-length");
+            credentialsValid = true;
+            return "200 认证成功" + (type != null ? " · " + type : "") + (len != null ? " · " + len + "B" : "");
+        }
+        if (b.code == 401) {
+            // 再试一次 Basic，海康有些固件网页/ISAPI 也认 Basic
+            String basic = "Basic " + android.util.Base64.encodeToString(
+                    (user + ":" + password).getBytes(), android.util.Base64.NO_WRAP);
+            Resp c = fetch(host, port, buildHttpGet(path, host, basic), timeoutMs);
+            if (c.code == 200 || c.code == 201) {
+                credentialsValid = true;
+                String len2 = c.headers.get("content-length");
+                return "200 认证成功（Basic）" + (len2 != null ? " · " + len2 + "B" : "");
+            }
+            return "401 认证失败（这个密码不对）";
+        }
+        if (b.code == 404) return "404 设备没有这个接口";
+        return b.code + " " + (b.reason == null ? "" : b.reason);
     }
 
     private static long tcpLatency(String host, int port, int timeoutMs) {
@@ -285,12 +359,16 @@ public class RtspProbe {
         String host = normalizeHost(rawIp);
         workingTemplate = null;
         challenge = "";
+        credentialsValid = false;
         StringBuilder r = new StringBuilder();
         r.append("目标: ").append(host.isEmpty() ? "(空)" : host).append("\n");
-        r.append("账号: ").append(user == null || user.isEmpty() ? "(空)" : user).append("\n\n");
+        r.append("账号: ").append(user == null || user.isEmpty() ? "(空)" : user).append("\n");
+        String pw = password == null ? "" : password;
+        r.append("密码: ").append(pw.isEmpty() ? "(空)" : (pw.length() + " 位")).append("\n\n");
         if (host.isEmpty()) {
             return r.append("❌ IP 为空，先填写摄像头 IP（例如 192.168.31.89）").toString();
         }
+        int to = Math.max(1500, Math.min(timeoutMs, 4000));
 
         r.append("【1】端口连通性\n");
         List<Integer> open = new ArrayList<>();
@@ -309,78 +387,74 @@ public class RtspProbe {
         for (int p : new int[]{554, 8554, 10554}) {
             if (open.contains(p)) { rtspPort = p; break; }
         }
-        if (rtspPort < 0) {
-            r.append("【2】RTSP 探测\n  跳过（RTSP 端口没有开放）\n\n");
-            r.append("【3】结论\n");
-            if (open.contains(80) || open.contains(8000)) {
-                r.append("  ❌ 网页端口(80/8000)是通的，但 RTSP 端口 554/8554/10554 都不通。\n");
-                r.append("  这基本可以确定：设备的 RTSP 服务被关闭、或改到了别的端口。\n");
-                r.append("  → 打开摄像头后台（浏览器里那个页面）找「网络 → 高级设置 → RTSP」，\n");
-                r.append("     把「启用 RTSP」打开；若端口不是 554，把 设置 → RTSP 模板里的端口改掉。\n");
-                return r.toString();
-            }
-            r.append("  ❌ 554 / 8554 / 10554 / 80 都没有响应。\n");
-            r.append("  HTTP 能打开说明网络可达，所以问题在设备侧：\n");
-            r.append("  a) 摄像头后台「网络→高级→RTSP」里 RTSP 端口被关闭或改成了别的端口，去打开或按实际端口改；\n");
-            r.append("  b) 设备开了「IP 地址过滤 / 白名单」，手机 IP 不在允许范围；\n");
-            r.append("  c) 路由器开了 AP 隔离 / 客户端隔离，或访客网络把 554 拦了；\n");
-            r.append("  d) 部分设备的 RTSP 只允许内网访问且需要「码流加密」关闭。\n");
-            return r.toString();
-        }
 
-        r.append("【2】RTSP 路径探测（端口 ").append(rtspPort).append("）\n");
+        r.append("【2】RTSP 路径探测\n");
         boolean anyOk = false;
         String okPath = null;
         String okDesc = null;
-        for (String path : PATHS) {
-            String uri = "rtsp://" + host + ":" + rtspPort + path;
-            String res = describePath(host, rtspPort, uri, user == null ? "" : user,
-                    password == null ? "" : password, Math.max(2000, timeoutMs));
-            if (res.startsWith("200")) {
-                anyOk = true;
-                if (okPath == null) {
-                    okPath = path;
-                    okDesc = res;
-                    workingTemplate = "rtsp://{user}:{password}@{ip}:" + rtspPort + path;
+        if (rtspPort < 0) {
+            r.append("  跳过：RTSP 端口 554/8554/10554 都没有开放\n");
+        } else {
+            r.append("  端口 ").append(rtspPort).append("\n");
+            for (String path : PATHS) {
+                String uri = "rtsp://" + host + ":" + rtspPort + path;
+                String res = describePath(host, rtspPort, uri, user == null ? "" : user, pw, to);
+                if (res.startsWith("200")) {
+                    anyOk = true;
+                    if (okPath == null) {
+                        okPath = path;
+                        okDesc = res;
+                        workingTemplate = "rtsp://{user}:{password}@{ip}:" + rtspPort + path;
+                    }
+                    r.append("  ✅ ").append(path).append("  →  ").append(res).append("\n");
+                } else {
+                    r.append("  ✖ ").append(path).append("  →  ").append(res).append("\n");
                 }
-                r.append("  ✅ ").append(path).append("  →  ").append(res).append("\n");
-            } else {
-                r.append("  ✖ ").append(path).append("  →  ").append(res).append("\n");
             }
         }
-        if (!challenge.isEmpty()) {
-            r.append("认证方式: ").append(challenge).append("\n");
-        }
-        r.append("\n【3】结论\n");
+        if (!challenge.isEmpty()) r.append("  认证方式: ").append(challenge).append("\n");
 
+        boolean httpOpen = open.contains(80) || open.contains(8000);
+        boolean gotAuth = false;
+        if (httpOpen) {
+            int port = open.contains(80) ? 80 : 8000;
+            r.append("\n【3】HTTP 账号校验（用来判断密码对不对）\n");
+            for (String hp : HTTP_PATHS) {
+                String res = httpCredentialCheck(host, port, hp, user == null ? "" : user, pw, to);
+                if (res.startsWith("200 认证成功")) gotAuth = true;
+                r.append("  ").append(hp).append("  →  ").append(res).append("\n");
+            }
+        }
+
+        r.append("\n【4】结论\n");
         if (anyOk) {
             r.append("  ✅ RTSP 通路正常：").append(okPath).append(" → ").append(okDesc).append("\n\n");
-            r.append("  如果 App 里还是不出画面，按顺序试：\n");
-            r.append("  1) 设置 → 每页数量改成 4，减少同时解码路数；\n");
-            r.append("  2) 设置 → 解码模式改成「软件兼容」；\n");
-            r.append("  3) 设置 → 连接超时改 8000；\n");
-            r.append("  4) 设置 → RTSP 模板，把能用的这条放到第一行：\n");
-            r.append("     rtsp://{user}:{password}@{ip}:").append(rtspPort).append(okPath).append("\n");
-            if (okPath != null && okPath.contains("102")) {
-                r.append("  5) 你连的是子码流，分辨率低、最流畅，建议就用它。\n");
-            }
+            r.append("  App 里如果还是不出画面：\n");
+            r.append("  1) 点「一键用这个地址」把它设为第一优先；\n");
+            r.append("  2) 解码模式改「软件兼容」，每页数量改 4；\n");
             if (okDesc != null && okDesc.contains("H.265")) {
-                r.append("  ! 该码流是 H.265，老手机硬解可能不支持，务必试「软件兼容」。\n");
+                r.append("  ! 这是 H.265 码流，老机型硬解不支持，务必用软件解码。\n");
             }
-            if (challenge.toLowerCase().contains("digest") && challenge.toLowerCase().contains("qop")) {
-                r.append("\n  ! 该设备使用 Digest(qop=\"auth\") 认证，手机内置播放器(Media3)不支持这种写法，\n");
-                r.append("    本版本会自动切到 VLC 兼容通道播放（画面右上角显示「fps(兼容模式)」）。\n");
-            }
-        } else {
-            r.append("  ❌ 所有路径都连不上 RTSP。\n");
-            r.append("  看上面的每一条：\n");
-            r.append("  · 全是 401 → 用户名或密码不对（注意大小写；海康连续错 5 次会锁定 30 分钟，\n");
-            r.append("    锁定期间网页也会提示「登录失败次数过多」，等半小时或用另一组账号）；\n");
-            r.append("  · 全是 404 → 设备不是海康/大华这类路径，去设备后台或说明书里找 RTSP 地址，\n");
-            r.append("    填到 设置 → RTSP 模板；\n");
-            r.append("  · 无响应/超时 → 端口虽然开着但不是 RTSP 服务（比如 80 是网页端口），\n");
-            r.append("    请在设备后台确认 RTSP 端口号，并把模板里的 554 改成那个端口。\n");
+            return r.toString();
         }
+        if (!httpOpen) {
+            r.append("  ❌ RTSP 与 HTTP 都不通：确认手机和摄像机在同一网段，并在设备后台确认 RTSP 端口。\n");
+            return r.toString();
+        }
+        if (gotAuth) {
+            r.append("  ✅ 账号密码是对的（HTTP 接口 200），这台设备是认证方式/写法的问题，不是密码。\n");
+            r.append("  App 会自动改用 VLC 兼容通道播放。若仍不出画面，到设备后台把认证方式改成 Basic，\n");
+            r.append("  或关闭「认证增强 / 安全模式」，再重连。\n");
+            return r.toString();
+        }
+        r.append("  ❌ RTSP 全部 401，HTTP 也认证失败。两种可能：\n");
+        r.append("    a) 密码不对（网页能进说明密码是另一套，确认 App 里填的是同一套）；\n");
+        r.append("    b) 设备只接受某一种认证方式（比如只认 Basic），而它回的 401 挑战是 Digest，\n");
+        r.append("       导致客户端按 Digest 计算永远对不上。\n");
+        r.append("  网页登录用的密码，要和这台摄像头在 App 里填的一致；\n");
+        r.append("  批量添加时留空会用「设置 → 默认密码」。\n");
+        r.append("  点下面「换个密码重测」，输入网页登录那个密码再测，成功会自动保存并重连。\n");
+        r.append("  → 若密码确认没错：到设备后台「安全管理 → 认证方式 → RTSP认证」切成 Basic 并点保存。\n");
         return r.toString();
     }
 }

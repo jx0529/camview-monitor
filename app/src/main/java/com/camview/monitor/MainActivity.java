@@ -676,13 +676,64 @@ public class MainActivity extends Activity {
         if (hasTemplate) {
             b.setPositiveButton("一键用这个地址", (d, w) -> applyWorkingTemplate(row));
         }
-        b.setNeutralButton("复制报告", (d, w) -> {
-                    ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                    if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("rtsp-report", report));
-                    Ui.toast(this, "已复制，可粘贴发给开发者");
-                });
+        b.setNeutralButton("🔑 换个密码重测", (d, w) -> retestWithPassword(row));
         b.setNegativeButton("关闭", null);
         b.show();
+    }
+
+    /** 用用户输入的账号密码重新诊断，通过就保存到这台摄像头 */
+    private void retestWithPassword(final CameraRow row) {
+        LinearLayout box = Ui.column(this);
+        box.addView(Ui.title(this, "用正确的账号密码重测"));
+        box.addView(Ui.label(this, "账号"));
+        final EditText userIn = Ui.input(this, "",
+                row.info.user == null || row.info.user.isEmpty() ? "admin" : row.info.user, false);
+        box.addView(userIn);
+        box.addView(Ui.label(this, "密码（填网页登录时用的那个，如 admin123）"));
+        final EditText pwdIn = Ui.input(this, "", row.info.password == null ? "" : row.info.password, true);
+        box.addView(pwdIn);
+        box.addView(Ui.label(this, "测试通过会自动保存到这台摄像头并重连"));
+        AlertDialog d = Ui.dialog(this).setView(box)
+                .setPositiveButton("开始测试", null)
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.setOnShowListener(dd -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            final String user = userIn.getText().toString().trim();
+            final String pwd = pwdIn.getText().toString();
+            d.dismiss();
+            final AlertDialog prog = new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                    .setTitle("正在测试 " + row.ip)
+                    .setMessage("探测端口 → 认证 → 路径，约 10~20 秒…")
+                    .setCancelable(false)
+                    .create();
+            prog.show();
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final String report = RtspProbe.run(row.ip, user, pwd, Math.min(cfg.timeoutMs, 3000));
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            try { prog.dismiss(); } catch (Exception ignored) { }
+                            if (RtspProbe.workingTemplate != null || RtspProbe.credentialsValid) {
+                                cfg.setCameraCredentials(row.ip, user, pwd);
+                                row.info.user = user;
+                                row.info.password = pwd;
+                                if (RtspProbe.workingTemplate != null) {
+                                    applyWorkingTemplate(row);
+                                } else {
+                                    row.stream.restart();
+                                }
+                                Ui.toast(MainActivity.this, "认证通过，已保存账号密码并重连");
+                            }
+                            showReportDialog("诊断报告 · " + row.ip, report, row);
+                        }
+                    });
+                }
+            }).start();
+        }));
+        d.show();
     }
 
     private void chooseRotation(final CameraRow row) {
