@@ -148,7 +148,7 @@ public class MainActivity extends Activity {
 
     private void showCameraMenu() {
         String[] items = {"➕ 添加单个摄像头", "➕➕ 批量添加摄像头", "🔍 扫描网段", "☑ 多选：批量移动 / 删除（本组）",
-                "🗑 删除摄像头（跨分组勾选）", "🧹 删除全部摄像头（需二次确认）"};
+                "🩺 检测无画面摄像头（可删除）", "🗑 删除摄像头（跨分组勾选）", "🧹 删除全部摄像头（需二次确认）"};
         Ui.actionSheet(this, "摄像头", items, (index, text) -> {
             switch (index) {
                 case 0:
@@ -164,9 +164,12 @@ public class MainActivity extends Activity {
                     openMultiSelect();
                     break;
                 case 4:
-                    deleteCameras();
+                    openNoFrameCheck();
                     break;
                 case 5:
+                    deleteCameras();
+                    break;
+                case 6:
                     deleteAllCameras();
                     break;
             }
@@ -501,6 +504,17 @@ public class MainActivity extends Activity {
             Ui.toast(this, "成功添加 " + added + " 个摄像头");
         }));
         d.show();
+    }
+
+    /** 进入摄像头体检（真实解码预览，判断哪些连得上但没画面） */
+    private void openNoFrameCheck() {
+        String[] items = {"只查当前分组（" + cfg.groupCameraCount() + " 路，较快）",
+                "查全部摄像头（" + cfg.totalCameraCount() + " 路，较慢）"};
+        Ui.actionSheet(this, "检测范围", items, (index, text) -> {
+            Intent i = new Intent(this, CheckActivity.class);
+            i.putExtra("all", index == 1);
+            startActivity(i);
+        });
     }
 
     /** 多选面板：勾选本组摄像头 → 批量移动到其他分组 / 批量删除 */

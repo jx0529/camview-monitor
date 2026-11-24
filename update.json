@@ -1,6 +1,6 @@
 {
-  "version": "1.0.21",
-  "notes": "修复多选面板闪退：改用独立自定义对话框重写，加异常兜底与实时勾选计数",
-  "apk_path": "release/camview-monitor-1.0.21.apk",
-  "size": 23770394
+  "version": "1.0.22",
+  "notes": "新增摄像头体检：每批6路真实解码，10秒无帧判为无画面；支持查当前分组或全部，结果可勾选批量删除",
+  "apk_path": "release/camview-monitor-1.0.22.apk",
+  "size": 23775478
 }

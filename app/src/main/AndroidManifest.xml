@@ -47,6 +47,12 @@
             android:theme="@style/Theme.CamView.Fullscreen" />
 
         <activity
+            android:name=".CheckActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:exported="false"
+            android:label="摄像头体检" />
+
+        <activity
             android:name=".QuadActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
             android:exported="false"
