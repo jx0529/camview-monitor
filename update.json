@@ -1,6 +1,6 @@
 {
-  "version": "1.0.17",
-  "notes": "扫描界面：已添加设备自动忽略置灰；支持逐行勾选、长按起点→长按终点区间勾选、全选/反选/清空；添加按钮显示勾选数量",
-  "apk_path": "release/camview-monitor-1.0.17.apk",
-  "size": 23762538
+  "version": "1.0.18",
+  "notes": "修复扫描结果列表无法上下滑动（内层滚动被外层拦截），结果区加高到300dp",
+  "apk_path": "release/camview-monitor-1.0.18.apk",
+  "size": 23762598
 }

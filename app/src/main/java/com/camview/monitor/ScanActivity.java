@@ -163,14 +163,34 @@ public class ScanActivity extends Activity {
         hintLabel.setText("点一行 = 勾选/取消；长按一行设起点，再长按另一行 = 勾选这一段");
         root.addView(hintLabel);
 
-        ScrollView resultScroll = new ScrollView(this);
+        final ScrollView resultScroll = new ScrollView(this);
         resultScroll.setBackgroundResource(R.drawable.bg_panel);
         resultContainer = new LinearLayout(this);
         resultContainer.setOrientation(LinearLayout.VERTICAL);
         resultContainer.setPadding(Ui.dp(this, 8), Ui.dp(this, 8), Ui.dp(this, 8), Ui.dp(this, 8));
-        resultScroll.addView(resultContainer);
+        resultScroll.addView(resultContainer, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        resultScroll.setFillViewport(true);
+        // 关键：结果列表嵌在外层滚动里，必须抢走触摸事件，否则外层拦截后列表滑不动
+        resultScroll.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, android.view.MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                    case android.view.MotionEvent.ACTION_MOVE:
+                        v.getParent().requestDisallowInterceptTouchEvent(true);
+                        break;
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        v.getParent().requestDisallowInterceptTouchEvent(false);
+                        break;
+                }
+                return false;
+            }
+        });
         LinearLayout.LayoutParams rslp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 260));
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 300));
+        rslp.topMargin = Ui.dp(this, 4);
         root.addView(resultScroll, rslp);
 
         LinearLayout btnRow = new LinearLayout(this);
