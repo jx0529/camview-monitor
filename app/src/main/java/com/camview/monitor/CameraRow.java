@@ -98,6 +98,15 @@ public class CameraRow extends FrameLayout {
         switch (state) {
             case CameraStream.ST_LIVE:
                 dot.setBackgroundResource(R.drawable.dot_green);
+                if (stream.noFrame()) {
+                    // 已连上但 20 秒没有画面 → 直接标红提示（长按可删除）
+                    dot.setBackgroundResource(R.drawable.dot_red);
+                    statusText.setVisibility(View.VISIBLE);
+                    statusText.setTextColor(0xFFF85149);
+                    statusText.setText("⚠ 无画面（长按可删除）");
+                    break;
+                }
+                statusText.setTextColor(0xFF8B949E);
                 // VLC/抓图通道拿不到 fps 统计，不能据此判定“没有画面”
                 boolean frameSeen = stream.isVlcMode() || stream.isSnapMode() || fps > 0.01f;
                 statusText.setVisibility(frameSeen ? View.GONE : View.VISIBLE);

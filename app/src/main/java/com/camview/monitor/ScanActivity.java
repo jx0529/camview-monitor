@@ -59,13 +59,11 @@ public class ScanActivity extends Activity {
     }
 
     private View buildUi() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(0xFF0D1117);
+        // 整个页面不再套 ScrollView（避免和结果列表抢滚动），结果区用剩余空间
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 24));
-        scroll.addView(root, new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.setBackgroundColor(0xFF0D1117);
+        root.setPadding(Ui.dp(this, 14), Ui.dp(this, 10), Ui.dp(this, 14), Ui.dp(this, 10));
 
         TextView t = new TextView(this);
         t.setText("🔍 扫描网段");
@@ -83,7 +81,8 @@ public class ScanActivity extends Activity {
         rangeInput.setTextSize(14);
         rangeInput.setText("192.168.1.1-254");
         rangeInput.setInputType(InputType.TYPE_CLASS_TEXT);
-        rangeInput.setMinLines(2);
+        rangeInput.setMinLines(1);
+        rangeInput.setMaxLines(2);
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         rlp.topMargin = Ui.dp(this, 6);
@@ -189,7 +188,7 @@ public class ScanActivity extends Activity {
             }
         });
         LinearLayout.LayoutParams rslp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 300));
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         rslp.topMargin = Ui.dp(this, 4);
         root.addView(resultScroll, rslp);
 
@@ -226,7 +225,7 @@ public class ScanActivity extends Activity {
         });
         btnRow.addView(cancelBtn);
 
-        return scroll;
+        return root;
     }
 
     private ViewGroup.LayoutParams fullWidthParams() {

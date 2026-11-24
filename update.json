@@ -1,6 +1,6 @@
 {
-  "version": "1.0.18",
-  "notes": "修复扫描结果列表无法上下滑动（内层滚动被外层拦截），结果区加高到300dp",
-  "apk_path": "release/camview-monitor-1.0.18.apk",
-  "size": 23762598
+  "version": "1.0.19",
+  "notes": "横屏四路长按画面可旋转/翻转/改账号/移动分组/删除/重命名分组；自动标记20秒无画面并支持批量删除；扫描页去掉嵌套滚动，IP列表可正常滑动",
+  "apk_path": "release/camview-monitor-1.0.19.apk",
+  "size": 23765190
 }

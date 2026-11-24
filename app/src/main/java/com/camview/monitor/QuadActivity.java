@@ -1,6 +1,7 @@
 package com.camview.monitor;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -9,6 +10,7 @@ import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -180,6 +182,8 @@ public class QuadActivity extends Activity {
 
         // 常用功能（“该有的功能也在里面”）
         drawer.addView(drawerAction("↻ 重连本页", this::reconnectPage));
+        drawer.addView(drawerAction("🩺 检测无画面并删除", this::cleanNoFrame));
+        drawer.addView(drawerAction("✎ 编辑分组（重命名）", this::renameGroupDialog));
         drawer.addView(drawerAction("⇆ 本组首屏", () -> {
             base = 0;
             loadPage();
@@ -404,6 +408,10 @@ public class QuadActivity extends Activity {
                 i.putExtra("ip", target);
                 startActivity(i);
             });
+            cell.setOnLongClickListener(v -> {
+                showCellMenu(target);
+                return true;
+            });
         }
         return cell;
     }
@@ -436,6 +444,12 @@ public class QuadActivity extends Activity {
         for (int i = 0; i < n; i++) {
             CameraStream s = streams.get(i);
             TextView t = statusViews.get(i);
+            if (s.noFrame()) {
+                t.setVisibility(View.VISIBLE);
+                t.setText("⚠ 无画面 · 长按可删除");
+                t.setTextColor(0xFFF85149);
+                continue;
+            }
             boolean live = s.state == CameraStream.ST_LIVE
                     && (s.isVlcMode() || s.isSnapMode() || s.fps > 0.01f);
             if (live) {
@@ -451,6 +465,176 @@ public class QuadActivity extends Activity {
                 t.setTextColor(0xFFD29922);
             }
         }
+    }
+
+    // ==================== 单元格长按编辑 ====================
+
+    private void showCellMenu(final String ip) {
+        String[] items = {"⛶ 全屏放大", "♻ 重新连接", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转",
+                "🔐 编辑账号密码", "📁 移动到其他分组", "🗑 从分组删除", "✎ 编辑分组（重命名）"};
+        Ui.actionSheet(this, ip, items, (index, text) -> {
+            CameraInfo info = App.cfg().findCamera(ip);
+            CameraStream s = streamOf(ip);
+            switch (index) {
+                case 0: {
+                    Intent i = new Intent(this, FullscreenActivity.class);
+                    i.putExtra("ip", ip);
+                    startActivity(i);
+                    break;
+                }
+                case 1:
+                    if (s != null) { s.setActive(true); s.restart(); }
+                    Ui.toast(this, "正在重新连接 " + ip);
+                    break;
+                case 2:
+                    if (info != null) pickRotation(info, s);
+                    break;
+                case 3:
+                    if (s != null) { s.toggleFlipH(); App.cfg().save(); }
+                    break;
+                case 4:
+                    if (s != null) { s.toggleFlipV(); App.cfg().save(); }
+                    break;
+                case 5:
+                    editCredentials(ip);
+                    break;
+                case 6:
+                    moveToGroup(ip);
+                    break;
+                case 7:
+                    confirmDelete(ip);
+                    break;
+                case 8:
+                    renameGroupDialog();
+                    break;
+            }
+        });
+    }
+
+    private CameraStream streamOf(String ip) {
+        for (CameraStream s : streams) {
+            if (s.info != null && ip.equals(s.info.ip)) return s;
+        }
+        return null;
+    }
+
+    private void pickRotation(final CameraInfo info, CameraStream s) {
+        String[] items = {"0°", "90°", "180°", "270°"};
+        Ui.actionSheet(this, "旋转画面", items, (index, text) -> {
+            int deg = index * 90;
+            if (s != null) s.setRotation(deg);
+            info.rotation = deg;
+            App.cfg().save();
+            loadPage();   // 重建格子，保证旋转生效
+        });
+    }
+
+    private void editCredentials(final String ip) {
+        CameraInfo info = App.cfg().findCamera(ip);
+        if (info == null) return;
+        LinearLayout col = Ui.column(this);
+        EditText u = Ui.input(this, info.user, "用户名", false);
+        EditText p = Ui.input(this, info.password, "密码", true);
+        col.addView(u);
+        col.addView(p);
+        AlertDialog d = Ui.dialog(this).setTitle("账号密码 · " + ip)
+                .setView(col)
+                .setPositiveButton("保存", null)
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.setOnShowListener(dd -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            App.cfg().setCameraCredentials(ip, u.getText().toString().trim(), p.getText().toString().trim());
+            d.dismiss();
+            Ui.toast(this, "已保存，正在重连 " + ip);
+            CameraStream s = streamOf(ip);
+            if (s != null) { s.restart(); }
+        }));
+        d.show();
+    }
+
+    private void moveToGroup(final String ip) {
+        List<String> groups = App.cfg().groupNames();
+        groups.remove(groupName);
+        if (groups.isEmpty()) {
+            Ui.toast(this, "没有其他分组");
+            return;
+        }
+        String[] arr = groups.toArray(new String[0]);
+        Ui.actionSheet(this, "移动到分组 · " + ip, arr, (index, text) -> {
+            App.cfg().moveCamera(ip, groupName, arr[index]);
+            Ui.toast(this, "已移动到「" + arr[index] + "」");
+            loadPage();
+            refreshGroupList();
+        });
+    }
+
+    private void confirmDelete(final String ip) {
+        AlertDialog d = Ui.dialog(this).setTitle("删除摄像头")
+                .setMessage("确定从「" + groupName + "」删除 " + ip + " ？")
+                .setPositiveButton("删除", (dd, w) -> {
+                    App.cfg().removeCamera(ip);
+                    Ui.toast(this, "已删除 " + ip);
+                    loadPage();
+                    refreshGroupList();
+                })
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.show();
+    }
+
+    private void renameGroupDialog() {
+        EditText input = Ui.input(this, groupName, "新分组名", false);
+        AlertDialog d = Ui.dialog(this).setTitle("编辑分组")
+                .setView(input)
+                .setPositiveButton("保存", null)
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.setOnShowListener(dd -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String name = input.getText().toString().trim();
+            if (name.isEmpty()) { Ui.toast(this, "名字不能为空"); return; }
+            if (name.equals(groupName)) { d.dismiss(); return; }
+            if (!App.cfg().renameGroup(groupName, name)) {
+                Ui.toast(this, "该分组名已存在");
+                return;
+            }
+            groupName = name;
+            App.cfg().currentGroup = name;
+            App.cfg().save();
+            d.dismiss();
+            refreshGroupList();
+            Ui.toast(this, "已重命名为「" + name + "」");
+        }));
+        d.show();
+    }
+
+    /** 检测本页已连接但长时间没画面的路，确认后批量删除 */
+    private void cleanNoFrame() {
+        List<String> bad = new ArrayList<>();
+        for (CameraStream s : streams) {
+            if (s != null && s.info != null && s.noFrame()) bad.add(s.info.ip);
+        }
+        if (bad.isEmpty()) {
+            Ui.toast(this, "本页没有无画面的摄像头");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String ip : bad) sb.append("· ").append(ip).append("\n");
+        AlertDialog d = Ui.dialog(this).setTitle("无画面摄像头 " + bad.size() + " 个")
+                .setMessage("以下设备已连接但 20 秒以上没有画面：\n" + sb
+                        + "\n删除后可从扫描页重新添加。")
+                .setPositiveButton("全部删除", (dd, w) -> {
+                    for (String ip : bad) App.cfg().removeCamera(ip);
+                    Ui.toast(this, "已删除 " + bad.size() + " 个");
+                    loadPage();
+                    refreshGroupList();
+                })
+                .setNegativeButton("取消", null)
+                .create();
+        Ui.styleDialog(d);
+        d.show();
     }
 
     @Override

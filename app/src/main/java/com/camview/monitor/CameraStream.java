@@ -58,6 +58,10 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     public int state = ST_IDLE;
     public volatile float fps = 0f;
+    /** 最后一次真正刷出画面的时间戳（用于判定“已连接但无画面”） */
+    public volatile long lastFrameTs = 0L;
+    /** 连接成功时刻 */
+    public volatile long connectTs = 0L;
     /** 最近一次失败原因（给界面显示，方便定位问题） */
     public volatile String lastError = "";
     /** 当前正在尝试的地址（不含密码） */
@@ -561,6 +565,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
 
     /** 手动重连（"重启摄像头"用） */
     public void restart() {
+        lastFrameTs = 0L;
+        connectTs = 0L;
         templateIndex = 0;
         retryCount = 0;
         useTcp = cfg.rtspTcp;
@@ -584,6 +590,17 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         lastError = "";
         handler.removeCallbacks(reconnectTask);
         startSnap();
+    }
+
+    /** 已连接（或正在尝试）但长时间没有任何画面帧 → 疑似黑屏 */
+    public boolean noFrame() {
+        if (!active) return false;
+        if (state != ST_LIVE) return false;
+        if (lastFrameTs == 0L) {
+            // 刚连上还没出过帧：从连接成功那刻算起
+            return connectTs > 0 && System.currentTimeMillis() - connectTs > 20000;
+        }
+        return System.currentTimeMillis() - lastFrameTs > 20000;
     }
 
     public boolean isSnapMode() {
@@ -620,6 +637,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                     @Override
                     public void onFrame(android.graphics.Bitmap bmp) {
                         if (snapView != null) snapView.setImageBitmap(bmp);
+                        lastFrameTs = System.currentTimeMillis();
                         state = ST_LIVE;
                     }
 
@@ -768,6 +786,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         switch (event.type) {
             case MediaPlayer.Event.Playing:
                 state = ST_LIVE;
+                if (connectTs == 0L) connectTs = System.currentTimeMillis();
                 retryCount = 0;
                 updateVlcVideoSize();
                 // 看门狗：UDP 下 RTSP 握手成功但 RTP 收不到时，画面永远黑 →
@@ -780,6 +799,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 break;
             case MediaPlayer.Event.Vout:
                 vlcGotFrame = true;
+                lastFrameTs = System.currentTimeMillis();
                 updateVlcVideoSize();
                 resizeVlcWindow();
                 break;
@@ -849,6 +869,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     public void onVideoFrameAboutToBeRendered(long presentationTimeUs, long releaseTimeNs,
                                               Format format, android.media.MediaFormat mediaFormat) {
         frames++;
+        lastFrameTs = System.currentTimeMillis();
     }
 
     @Override
