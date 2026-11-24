@@ -1,6 +1,6 @@
 {
-  "version": "1.0.24",
-  "notes": "修复体检仅检测6路就退出：每批重建格子并直接持有视图引用，避免类型转换崩溃；全程加异常兜底",
-  "apk_path": "release/camview-monitor-1.0.24.apk",
-  "size": 23776046
+  "version": "1.0.26",
+  "notes": "改为就地多选：长按摄像头进入勾选模式，列表行左侧显示勾选框，底部操作条直接全选/移动/删除/取消",
+  "apk_path": "release/camview-monitor-1.0.26.apk",
+  "size": 23777198
 }

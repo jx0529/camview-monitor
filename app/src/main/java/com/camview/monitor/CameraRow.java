@@ -22,6 +22,8 @@ public class CameraRow extends FrameLayout {
     private final TextView fpsText;
     private final TextView tagText;
     private final View dot;
+    private android.widget.CheckBox selectBox;
+    private boolean selectMode = false;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final AppConfig cfg;
@@ -45,6 +47,19 @@ public class CameraRow extends FrameLayout {
         dot = findViewById(R.id.dot);
 
         ipText.setText(cam.ip);
+
+        selectBox = new android.widget.CheckBox(ctx);
+        selectBox.setButtonTintList(android.content.res.ColorStateList.valueOf(0xFF58A6FF));
+        selectBox.setClickable(false);
+        selectBox.setFocusable(false);
+        selectBox.setVisibility(GONE);
+        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
+                Ui.dp(ctx, 34), Ui.dp(ctx, 34));
+        slp.gravity = android.view.Gravity.TOP | android.view.Gravity.LEFT;
+        slp.leftMargin = Ui.dp(ctx, 4);
+        slp.topMargin = Ui.dp(ctx, 4);
+        addView(selectBox, slp);
+
         stream = new CameraStream(ctx, config, cam);
         updateTag();
         updateUi();
@@ -70,6 +85,22 @@ public class CameraRow extends FrameLayout {
         if (destroyed) return;
         if (active) attachStream();
         stream.setActive(active);
+    }
+
+    /** 进入/退出勾选模式：显示勾选框并禁用放大点击 */
+    public void setSelectMode(boolean on, boolean checked) {
+        selectMode = on;
+        if (selectBox == null) return;
+        selectBox.setVisibility(on ? VISIBLE : GONE);
+        selectBox.setChecked(checked);
+    }
+
+    public void setSelected(boolean checked) {
+        if (selectBox != null) selectBox.setChecked(checked);
+    }
+
+    public boolean isSelectMode() {
+        return selectMode;
     }
 
     public void updateTag() {

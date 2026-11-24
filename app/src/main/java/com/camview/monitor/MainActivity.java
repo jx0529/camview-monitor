@@ -161,7 +161,7 @@ public class MainActivity extends Activity {
                     startActivity(new Intent(this, ScanActivity.class));
                     break;
                 case 3:
-                    openMultiSelect();
+                    enterSelectMode(null);
                     break;
                 case 4:
                     openNoFrameCheck();
@@ -228,6 +228,12 @@ public class MainActivity extends Activity {
 
     /** 防止横屏时反复自动弹出四路 */
     private boolean quadOpening = false;
+
+    /** 就地多选（不弹独立窗口） */
+    private boolean selectMode = false;
+    private final java.util.LinkedHashSet<String> selectedIps = new java.util.LinkedHashSet<>();
+    private LinearLayout selectBar;
+    private TextView selectCountLabel;
 
     private void showMoreMenu() {
         String[] items = {"▦ 横屏四路同屏（选 4 路）", "重启所有摄像头", "🔐 全部改用 Basic 隧道（推荐）",
@@ -517,174 +523,153 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** 多选面板：勾选本组摄像头 → 批量移动到其他分组 / 批量删除 */
-    private void openMultiSelect() {
-        try {
-            List<String> ips = cfg.groups.get(cfg.currentGroup);
-            if (ips == null || ips.isEmpty()) {
-                Ui.toast(this, "当前分组没有摄像头");
-                return;
-            }
-            final List<String> list = new ArrayList<>(ips);
-            java.util.Collections.sort(list, (a, b) -> Long.compare(AppConfig.ipValue(a), AppConfig.ipValue(b)));
-            final CheckBox[] boxes = new CheckBox[list.size()];
+    // ==================== 就地多选（不弹窗） ====================
 
-            LinearLayout wrap = new LinearLayout(this);
-            wrap.setOrientation(LinearLayout.VERTICAL);
-            wrap.setBackgroundColor(0xFF161B22);
-            wrap.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 10));
+    /** 在列表里直接进入勾选模式；seed 为长按的那一路（自动勾上） */
+    private void enterSelectMode(String seedIp) {
+        if (cfg.groupCameraCount() <= 0) {
+            Ui.toast(this, "当前分组没有摄像头");
+            return;
+        }
+        selectMode = true;
+        selectedIps.clear();
+        if (seedIp != null) selectedIps.add(seedIp);
+        renderPage();
+        showSelectBar(true);
+        Ui.toast(this, "已进入多选：点摄像头勾选，完成后用底部按钮操作");
+    }
 
-            LinearLayout headRow = new LinearLayout(this);
-            headRow.setOrientation(LinearLayout.HORIZONTAL);
-            headRow.setGravity(Gravity.CENTER_VERTICAL);
-            TextView title = new TextView(this);
-            title.setText("多选 · " + cfg.currentGroup);
-            title.setTextColor(0xFFC9D1D9);
-            title.setTextSize(16);
-            title.setTypeface(null, Typeface.BOLD);
-            headRow.addView(title, new LinearLayout.LayoutParams(0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            TextView closeTop = new TextView(this);
-            closeTop.setText("✕");
-            closeTop.setTextColor(0xFF8B949E);
-            closeTop.setTextSize(16);
-            closeTop.setGravity(Gravity.CENTER);
-            closeTop.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 10), 0);
-            headRow.addView(closeTop, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(this, 30)));
-            wrap.addView(headRow);
+    private void exitSelectMode() {
+        selectMode = false;
+        selectedIps.clear();
+        showSelectBar(false);
+        renderPage();
+    }
 
-            TextView sub = new TextView(this);
-            sub.setText("本组共 " + list.size() + " 路；勾选后可一起移动或删除");
-            sub.setTextColor(0xFF8B949E);
-            sub.setTextSize(12);
-            sub.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 6));
-            wrap.addView(sub);
+    private void toggleSelect(String ip, CameraRow row) {
+        if (selectedIps.contains(ip)) selectedIps.remove(ip);
+        else selectedIps.add(ip);
+        row.setSelected(selectedIps.contains(ip));
+        updateSelectBar();
+    }
 
-            final TextView countLabel = new TextView(this);
-            countLabel.setTextColor(0xFF58A6FF);
-            countLabel.setTextSize(12);
-            countLabel.setText("已勾选 0 个");
-            wrap.addView(countLabel);
+    private void toggleSelect(String ip) {
+        if (selectedIps.contains(ip)) selectedIps.remove(ip);
+        else selectedIps.add(ip);
+        for (CameraRow r : rows) {
+            if (ip.equals(r.ip)) r.setSelected(selectedIps.contains(ip));
+        }
+        updateSelectBar();
+    }
 
-            ScrollView scroll = new ScrollView(this);
-            final LinearLayout boxCol = new LinearLayout(this);
-            boxCol.setOrientation(LinearLayout.VERTICAL);
+    private void showSelectBar(boolean show) {
+        if (selectBar == null) buildSelectBar();
+        selectBar.setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
+        if (show) updateSelectBar();
+    }
 
-            final Runnable refreshCount = new Runnable() {
-                @Override
-                public void run() {
-                    int n = 0;
-                    for (CheckBox cb : boxes) if (cb.isChecked()) n++;
-                    countLabel.setText("已勾选 " + n + " 个");
-                }
-            };
+    private void buildSelectBar() {
+        selectBar = new LinearLayout(this);
+        selectBar.setOrientation(LinearLayout.VERTICAL);
+        selectBar.setBackgroundColor(0xF2161B22);
+        selectBar.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6));
 
-            for (int i = 0; i < list.size(); i++) {
-                CheckBox cb = new CheckBox(this);
-                cb.setText(list.get(i));
-                cb.setTextColor(0xFFC9D1D9);
-                cb.setTextSize(13);
-                cb.setButtonTintList(ColorStateList.valueOf(0xFF58A6FF));
-                cb.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 2));
-                cb.setTag(list.get(i));
-                cb.setOnCheckedChangeListener((btn, checked) -> refreshCount.run());
-                boxes[i] = cb;
-                boxCol.addView(cb, new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            }
-            scroll.addView(boxCol, new ScrollView.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            scroll.setBackgroundResource(R.drawable.bg_input);
-            wrap.addView(scroll, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 300)));
+        selectCountLabel = new TextView(this);
+        selectCountLabel.setTextColor(0xFF58A6FF);
+        selectCountLabel.setTextSize(12);
+        selectCountLabel.setPadding(Ui.dp(this, 4), 0, 0, Ui.dp(this, 2));
+        selectBar.addView(selectCountLabel);
 
-            final Dialog dlg = new Dialog(this, R.style.Theme_CamView_Dialog);
-            dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        LinearLayout line = new LinearLayout(this);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        String[] labels = {"全选本组", "清空", "移动到分组", "删除", "取消"};
+        int[] colors = {0xFFC9D1D9, 0xFFC9D1D9, 0xFF3FB950, 0xFFF85149, 0xFF8B949E};
+        Runnable[] actions = {
+                this::selectAllInGroup, this::clearSelection,
+                this::moveSelectedToGroup, this::deleteSelected, this::exitSelectMode
+        };
+        for (int i = 0; i < labels.length; i++) {
+            TextView b = new TextView(this);
+            b.setText(labels[i]);
+            b.setTextSize(13);
+            b.setTextColor(colors[i]);
+            b.setGravity(android.view.Gravity.CENTER);
+            b.setBackgroundResource(R.drawable.bg_toolbar_button);
+            final Runnable act = actions[i];
+            b.setOnClickListener(v -> act.run());
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, Ui.dp(this, 38), 1f);
+            lp.leftMargin = Ui.dp(this, 2);
+            lp.rightMargin = Ui.dp(this, 2);
+            line.addView(b, lp);
+        }
+        selectBar.addView(line);
 
-            LinearLayout actions = new LinearLayout(this);
-            actions.setOrientation(LinearLayout.HORIZONTAL);
-            actions.setPadding(0, Ui.dp(this, 8), 0, 0);
-            String[] labels = {"全选", "清空", "移动选中", "删除选中"};
-            for (int i = 0; i < labels.length; i++) {
-                final int idx = i;
-                TextView b = new TextView(this);
-                b.setText(labels[i]);
-                b.setTextSize(13);
-                b.setGravity(Gravity.CENTER);
-                b.setTextColor(idx == 3 ? 0xFFF85149 : (idx == 2 ? 0xFF3FB950 : 0xFF58A6FF));
-                b.setPadding(0, Ui.dp(this, 9), 0, Ui.dp(this, 9));
-                b.setBackgroundResource(R.drawable.bg_toolbar_button);
-                b.setOnClickListener(v -> {
-                    if (idx == 0) {
-                        for (CheckBox cb : boxes) cb.setChecked(true);
-                        refreshCount.run();
-                    } else if (idx == 1) {
-                        for (CheckBox cb : boxes) cb.setChecked(false);
-                        refreshCount.run();
-                    } else {
-                        List<String> picked = new ArrayList<>();
-                        for (CheckBox cb : boxes) if (cb.isChecked()) picked.add((String) cb.getTag());
-                        if (picked.isEmpty()) {
-                            Ui.toast(this, "还没勾选任何摄像头");
-                            return;
-                        }
-                        if (idx == 2) movePickedToGroup(picked, dlg);
-                        else confirmDeletePicked(picked, dlg);
-                    }
-                });
-                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, Ui.dp(this, 38), 1f);
-                blp.leftMargin = Ui.dp(this, 3);
-                blp.rightMargin = Ui.dp(this, 3);
-                actions.addView(b, blp);
-            }
-            wrap.addView(actions, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // 压在列表上方（列表区域底部）
+        LinearLayout root = (LinearLayout) listScroll.getParent();
+        int index = root.indexOfChild(statusBar);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        root.addView(selectBar, Math.max(0, index), lp);
+        selectBar.setVisibility(android.view.View.GONE);
+    }
 
-            closeTop.setOnClickListener(v -> dlg.dismiss());
-            dlg.setContentView(wrap);
-            dlg.show();
-        } catch (Throwable t) {
-            Ui.toast(this, "打开多选失败：" + t.getClass().getSimpleName());
+    private void updateSelectBar() {
+        if (selectCountLabel != null) {
+            selectCountLabel.setText("已勾选 " + selectedIps.size() + " 个 · 点摄像头可勾选/取消");
         }
     }
 
-    /** 把勾选的摄像头整批移到另一个分组 */
-    private void movePickedToGroup(final List<String> picked, final Dialog parent) {
+    private void selectAllInGroup() {
+        selectedIps.clear();
+        List<String> ips = cfg.groups.get(cfg.currentGroup);
+        if (ips != null) selectedIps.addAll(ips);
+        for (CameraRow r : rows) r.setSelected(selectedIps.contains(r.ip));
+        updateSelectBar();
+    }
+
+    private void clearSelection() {
+        selectedIps.clear();
+        for (CameraRow r : rows) r.setSelected(false);
+        updateSelectBar();
+    }
+
+    private void moveSelectedToGroup() {
+        if (selectedIps.isEmpty()) {
+            Ui.toast(this, "还没有勾选摄像头");
+            return;
+        }
         List<String> targets = cfg.groupNames();
         targets.remove(cfg.currentGroup);
         if (targets.isEmpty()) {
-            Ui.toast(this, "没有其他分组，请先在顶部「📁 分组」里新建分组");
+            Ui.toast(this, "没有其他分组，请先新建分组");
             return;
         }
         final String[] arr = targets.toArray(new String[0]);
-        Ui.actionSheet(this, "移动到哪个分组（" + picked.size() + " 路）", arr, (index, text) -> {
+        Ui.actionSheet(this, "移动 " + selectedIps.size() + " 路到", arr, (index, text) -> {
             int moved = 0;
-            for (String ip : picked) {
+            for (String ip : new ArrayList<>(selectedIps)) {
                 if (cfg.moveCamera(ip, cfg.currentGroup, arr[index])) moved++;
             }
-            if (parent != null && parent.isShowing()) parent.dismiss();
-            refreshAll();
-            Ui.toast(this, "已移动 " + moved + " 个摄像头到「" + arr[index] + "」");
+            Ui.toast(this, "已移动 " + moved + " 个到「" + arr[index] + "」");
+            exitSelectMode();
         });
     }
 
-    private void confirmDeletePicked(final List<String> picked, final Dialog parent) {
+    private void deleteSelected() {
+        if (selectedIps.isEmpty()) {
+            Ui.toast(this, "还没有勾选摄像头");
+            return;
+        }
+        final List<String> picked = new ArrayList<>(selectedIps);
         new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
                 .setTitle("删除 " + picked.size() + " 个摄像头")
-                .setMessage("将从「" + cfg.currentGroup + "」删除以下设备：\n"
-                        + picked.subList(0, Math.min(8, picked.size())).toString().replace("[", "").replace("]", "")
-                        + (picked.size() > 8 ? " 等 " + picked.size() + " 个" : "")
-                        + "\n\n此操作不可撤销。")
+                .setMessage("将删除以下设备：\n" + picked.subList(0, Math.min(8, picked.size()))
+                        .toString().replace("[", "").replace("]", "")
+                        + (picked.size() > 8 ? " 等 " + picked.size() + " 个" : ""))
                 .setPositiveButton("删除", (d, w) -> {
-                    int n = 0;
-                    for (String ip : picked) {
-                        cfg.removeCamera(ip);
-                        n++;
-                    }
-                    if (parent != null && parent.isShowing()) parent.dismiss();
-                    refreshAll();
-                    Ui.toast(this, "已删除 " + n + " 个摄像头");
+                    for (String ip : picked) cfg.removeCamera(ip);
+                    Ui.toast(this, "已删除 " + picked.size() + " 个");
+                    exitSelectMode();
                 })
                 .setNegativeButton("取消", null)
                 .show();
@@ -743,12 +728,22 @@ public class MainActivity extends Activity {
         for (final String ip : ips) {
             CameraInfo info = cfg.findCamera(ip);
             if (info == null) info = cfg.getOrCreateCamera(ip);
-            CameraRow row = new CameraRow(this, cfg, info);
-            row.setOnClickListener(v -> openFullscreen(ip));
-            row.setOnLongClickListener(v -> {
-                showCameraItemMenu(row);
-                return true;
-            });
+            final CameraRow row = new CameraRow(this, cfg, info);
+            if (selectMode) {
+                row.setSelectMode(true, selectedIps.contains(ip));
+                row.setOnClickListener(v -> toggleSelect(ip, row));
+                row.setOnLongClickListener(v -> {
+                    toggleSelect(ip, row);
+                    return true;
+                });
+            } else {
+                row.setSelectMode(false, false);
+                row.setOnClickListener(v -> openFullscreen(ip));
+                row.setOnLongClickListener(v -> {
+                    showCameraItemMenu(row);
+                    return true;
+                });
+            }
             listContainer.addView(row, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             rows.add(row);
@@ -867,7 +862,7 @@ public class MainActivity extends Activity {
 
     private void showCameraItemMenu(final CameraRow row) {
         String[] items = {"🔍 放大画面", "🩺 连接诊断（连不上先点这个）", "📷 网页抓图模式（从 HTTP 拉图）",
-                "📁 移动到分组", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转", "♻ 重新连接", "🗑 删除摄像头", "🔗 自定义抓图地址", "🔐 强制 Basic 认证（隧道）"};
+                "☑ 多选（在当前列表勾选，再一起移动）", "📁 移动到分组", "🔄 旋转画面", "↔ 水平翻转", "↕ 垂直翻转", "♻ 重新连接", "🗑 删除摄像头", "🔗 自定义抓图地址", "🔐 强制 Basic 认证（隧道）"};
         Ui.actionSheet(this, row.ip, items, (index, text) -> {
             switch (index) {
                 case 0:
@@ -881,26 +876,29 @@ public class MainActivity extends Activity {
                     Ui.toast(this, "已切换到网页抓图模式（HTTP 拉图）\n" + row.ip);
                     break;
                 case 3:
-                    moveCameraDialog(row.ip);
+                    enterSelectMode(row.ip);
                     break;
                 case 4:
-                    chooseRotation(row);
+                    moveCameraDialog(row.ip);
                     break;
                 case 5:
+                    chooseRotation(row);
+                    break;
+                case 6:
                     row.stream.toggleFlipH();
                     cfg.save();
                     row.updateTag();
                     break;
-                case 6:
+                case 7:
                     row.stream.toggleFlipV();
                     cfg.save();
                     row.updateTag();
                     break;
-                case 7:
+                case 8:
                     row.stream.restart();
                     Ui.toast(this, "正在重新连接 " + row.ip);
                     break;
-                case 8:
+                case 9:
                     new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
                             .setTitle("删除摄像头")
                             .setMessage("确定删除 " + row.ip + " ？")
@@ -911,10 +909,10 @@ public class MainActivity extends Activity {
                             .setNegativeButton("取消", null)
                             .show();
                     break;
-                case 9:
+                case 10:
                     customSnapUrl(row);
                     break;
-                case 10:
+                case 11:
                     boolean on = "basic".equals(row.info.authMode);
                     row.info.authMode = on ? "" : "basic";
                     cfg.save();
