@@ -1,6 +1,6 @@
 {
-  "version": "1.0.11",
-  "notes": "修复VLC全屏画面缩成底部一条(setWindowSize)；新增横屏四路同屏(2x2)；一键全部改用Basic隧道",
-  "apk_path": "release/camview-monitor-1.0.11.apk",
-  "size": 23748234
+  "version": "1.0.13",
+  "notes": "实时性优化：低延迟模式(优先UDP+150ms缓存+关时钟同步)、缓存可选0/150/300/800ms；横屏四路去掉实时小字、支持左右翻4个",
+  "apk_path": "release/camview-monitor-1.0.13.apk",
+  "size": 23749446
 }

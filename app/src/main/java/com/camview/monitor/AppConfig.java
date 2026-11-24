@@ -54,6 +54,10 @@ public class AppConfig {
     public boolean hwDecode = true;
     /** RTSP 走 TCP，穿透路由/公网更稳定 */
     public boolean rtspTcp = true;
+    /** 低延迟模式：优先 UDP + 小缓存（实时性优先，弱网可能花屏） */
+    public boolean lowLatency = true;
+    /** 播放缓存（毫秒），越小越实时 */
+    public int cacheMs = 150;
     public boolean autoUpdate = true;
     public String gpuMode = "auto";
     /** GitHub 仓库 owner/repo，用于检查更新 */

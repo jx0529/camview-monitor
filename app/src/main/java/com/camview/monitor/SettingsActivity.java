@@ -25,9 +25,11 @@ public class SettingsActivity extends Activity {
 
     private AppConfig cfg;
     private EditText userIn, pwdIn, timeoutIn, templatesIn, repoIn;
-    private Switch fpsSwitch, hwSwitch, tcpSwitch, updateSwitch;
+    private Switch fpsSwitch, hwSwitch, tcpSwitch, updateSwitch, lowLatencySwitch;
     private TextView perPageValue, decodeValue;
     private int perPage;
+    private int cacheMs;
+    private TextView cacheValue;
     private String decodeMode;
 
     @Override
@@ -35,6 +37,7 @@ public class SettingsActivity extends Activity {
         super.onCreate(savedInstanceState);
         cfg = App.cfg();
         perPage = cfg.itemsPerPage;
+        cacheMs = cfg.cacheMs;
         decodeMode = cfg.gpuMode == null ? "auto" : cfg.gpuMode;
         setContentView(buildUi());
     }
@@ -77,6 +80,16 @@ public class SettingsActivity extends Activity {
         root.addView(timeoutIn);
 
         tcpSwitch = switchRow(root, "RTSP 走 TCP（跨路由更稳定，推荐开启）", cfg.rtspTcp);
+        lowLatencySwitch = switchRow(root, "低延迟模式（优先 UDP + 小缓存，实时优先）", cfg.lowLatency);
+        cacheValue = valueRow(root, "播放缓存", cfg.cacheMs + " ms");
+        cacheValue.setOnClickListener(v -> {
+            String[] items = {"0 ms（最实时，可能花屏）", "150 ms（推荐）", "300 ms", "800 ms（最稳，延迟大）"};
+            Ui.actionSheet(this, "播放缓存", items, (index, text) -> {
+                int[] values = {0, 150, 300, 800};
+                cacheMs = values[index];
+                cacheValue.setText(cacheMs + " ms");
+            });
+        });
         hwSwitch = switchRow(root, "硬件解码（MediaCodec / GPU）", cfg.hwDecode);
 
         decodeValue = valueRow(root, "解码模式", decodeText());
@@ -289,6 +302,8 @@ public class SettingsActivity extends Activity {
         cfg.defaultPassword = pwdIn.getText().toString();
         cfg.timeoutMs = timeout;
         cfg.rtspTcp = tcpSwitch.isChecked();
+        cfg.lowLatency = lowLatencySwitch.isChecked();
+        cfg.cacheMs = cacheMs;
         cfg.hwDecode = hwSwitch.isChecked();
         cfg.showFps = fpsSwitch.isChecked();
         cfg.gpuMode = decodeMode;

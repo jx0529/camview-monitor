@@ -217,6 +217,9 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** 防止横屏时反复自动弹出四路 */
+    private boolean quadOpening = false;
+
     private void showMoreMenu() {
         String[] items = {"▦ 横屏四路同屏（选 4 路）", "重启所有摄像头", "🔐 全部改用 Basic 隧道（推荐）",
                 "♻ 全部改回自动认证", "检查更新", "导入电脑端配置", "关于 / 使用说明"};
@@ -281,7 +284,8 @@ public class MainActivity extends Activity {
                 return;
             }
             Intent i = new Intent(this, QuadActivity.class);
-            i.putStringArrayListExtra("ips", new ArrayList<>(sel));
+            i.putExtra("group", cfg.currentGroup);
+            i.putExtra("start", cfg.currentPage * cfg.itemsPerPage);
             startActivity(i);
         });
         b.setNegativeButton("取消", null);
@@ -928,6 +932,23 @@ public class MainActivity extends Activity {
     }
 
     // ==================== 生命周期 ====================
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (newConfig.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT) {
+            quadOpening = false;
+            return;
+        }
+        if (newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                && !quadOpening) {
+            quadOpening = true;
+            Intent i = new Intent(this, QuadActivity.class);
+            i.putExtra("group", cfg.currentGroup);
+            i.putExtra("start", cfg.currentPage * cfg.itemsPerPage);
+            startActivity(i);
+        }
+    }
 
     @Override
     protected void onResume() {

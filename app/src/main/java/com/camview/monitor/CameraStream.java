@@ -93,6 +93,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     // ---- Basic 认证注入隧道（设备只认 Basic、却抛 Digest 挑战时用）----
     private RtspBasicTunnel tunnel;
     private boolean tunnelTried = false;
+    /** VLC 已从 UDP 退回 TCP */
+    private boolean vlcForceTcp = false;
 
     private final Runnable fpsTick = new Runnable() {
         @Override
@@ -691,8 +693,9 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 args.add("--no-audio");
                 args.add("--no-video-title-show");
                 args.add("--no-sub-autodetect-file");
-                args.add("--network-caching=300");
-                args.add("--live-caching=300");
+                args.add("--network-caching=" + Math.max(0, cfg.cacheMs));
+                args.add("--live-caching=" + Math.max(0, cfg.cacheMs));
+                args.add("--clock-synchro=0");
                 libVlc = new LibVLC(ctx, args);
             }
             MediaPlayer p = new MediaPlayer(libVlc);
@@ -709,8 +712,15 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
             Log.i(TAG, info.ip + " VLC 地址: " + maskPassword(vurl));
             Media m = new Media(libVlc, Uri.parse(vurl));
             m.setHWDecoderEnabled(cfg.hwDecode, false);
-            if (cfg.rtspTcp || useTunnel()) m.addOption(":rtsp-tcp");
-            m.addOption(":network-caching=300");
+            // 低延迟模式默认走 UDP（不再强制 TCP，隧道只做认证，不搬流）
+            boolean tcp = vlcForceTcp || (!cfg.lowLatency && cfg.rtspTcp);
+            if (tcp) m.addOption(":rtsp-tcp");
+            m.addOption(":network-caching=" + Math.max(0, cfg.cacheMs));
+            m.addOption(":live-caching=" + Math.max(0, cfg.cacheMs));
+            m.addOption(":clock-synchro=0");
+            m.addOption(":drop-late-frames");
+            m.addOption(":skip-frames");
+            m.addOption(":no-audio");
             p.setEventListener(new MediaPlayer.EventListener() {
                 @Override
                 public void onEvent(MediaPlayer.Event event) {
@@ -748,6 +758,20 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 resizeVlcWindow();
                 break;
             case MediaPlayer.Event.EncounteredError:
+                if (!vlcForceTcp && cfg.lowLatency) {
+                    // UDP 播不了 → 退回 TCP 再试一次（UDP 在某设备/网络下可能被丢）
+                    vlcForceTcp = true;
+                    lastError = "";
+                    state = ST_CONNECTING;
+                    stopVlc();
+                    handler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!released && vlcMode) startVlc();
+                        }
+                    }, 500);
+                    return;
+                }
                 lastError = "播放失败：设备拒绝或码流不可解析";
                 state = ST_FAILED;
                 scheduleReconnect();
