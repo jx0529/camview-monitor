@@ -54,8 +54,8 @@ public class AppConfig {
     public boolean hwDecode = true;
     /** RTSP 走 TCP，穿透路由/公网更稳定 */
     public boolean rtspTcp = true;
-    /** 低延迟模式：优先 UDP + 小缓存（实时性优先，弱网可能花屏） */
-    public boolean lowLatency = true;
+    /** 强制 UDP 传输（延迟最低，但部分设备/NAT 下 RTP 到不了手机 → 无画面） */
+    public boolean forceUdp = false;
     /** 播放缓存（毫秒），越小越实时 */
     public int cacheMs = 150;
     public boolean autoUpdate = true;
@@ -94,6 +94,7 @@ public class AppConfig {
             showFps = o.optBoolean("show_fps", showFps);
             hwDecode = o.optBoolean("hw_decode", hwDecode);
             rtspTcp = o.optBoolean("rtsp_tcp", rtspTcp);
+            forceUdp = o.optBoolean("force_udp", forceUdp);
             autoUpdate = o.optBoolean("auto_check_update", autoUpdate);
             gpuMode = o.optString("gpu_mode", "auto");
             githubRepo = o.optString("github_repo", "");
@@ -170,6 +171,7 @@ public class AppConfig {
             o.put("show_fps", showFps);
             o.put("hw_decode", hwDecode);
             o.put("rtsp_tcp", rtspTcp);
+            o.put("force_udp", forceUdp);
             o.put("auto_check_update", autoUpdate);
             o.put("gpu_mode", gpuMode);
             o.put("github_repo", githubRepo);

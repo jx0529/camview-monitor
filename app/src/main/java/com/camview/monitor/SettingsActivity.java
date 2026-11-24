@@ -80,7 +80,7 @@ public class SettingsActivity extends Activity {
         root.addView(timeoutIn);
 
         tcpSwitch = switchRow(root, "RTSP 走 TCP（跨路由更稳定，推荐开启）", cfg.rtspTcp);
-        lowLatencySwitch = switchRow(root, "低延迟模式（优先 UDP + 小缓存，实时优先）", cfg.lowLatency);
+        lowLatencySwitch = switchRow(root, "强制 UDP 传输（延迟最低，个别设备会无画面）", cfg.forceUdp);
         cacheValue = valueRow(root, "播放缓存", cfg.cacheMs + " ms");
         cacheValue.setOnClickListener(v -> {
             String[] items = {"0 ms（最实时，可能花屏）", "150 ms（推荐）", "300 ms", "800 ms（最稳，延迟大）"};
@@ -302,7 +302,7 @@ public class SettingsActivity extends Activity {
         cfg.defaultPassword = pwdIn.getText().toString();
         cfg.timeoutMs = timeout;
         cfg.rtspTcp = tcpSwitch.isChecked();
-        cfg.lowLatency = lowLatencySwitch.isChecked();
+        cfg.forceUdp = lowLatencySwitch.isChecked();
         cfg.cacheMs = cacheMs;
         cfg.hwDecode = hwSwitch.isChecked();
         cfg.showFps = fpsSwitch.isChecked();

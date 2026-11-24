@@ -126,10 +126,14 @@ public class CameraRow extends FrameLayout {
                 fpsText.setText(String.format(java.util.Locale.US, "抓图 %.1f fps", stream.snapFps));
                 fpsText.setTextColor(stream.snapFps > 0.5f ? 0xFF3FB950 : 0xFFD29922);
             } else if (stream.isVlcMode()) {
-                fpsText.setText(stream.streamRate > 0.5f
-                        ? String.format(java.util.Locale.US, "%.0f fps", stream.streamRate)
-                        : "实时");
-                fpsText.setTextColor(0xFF8B949E);
+                // 硬解通道拿不到实时帧率，不显示占位文字（“实时”观感像水印）
+                if (stream.streamRate > 0.5f) {
+                    fpsText.setText(String.format(java.util.Locale.US, "%.0f fps", stream.streamRate));
+                    fpsText.setTextColor(0xFF8B949E);
+                    fpsText.setVisibility(VISIBLE);
+                } else {
+                    fpsText.setVisibility(GONE);
+                }
             } else {
                 fpsText.setText(String.format(java.util.Locale.US, "%.1f fps", fps));
                 if (fps > 15) fpsText.setTextColor(0xFF3FB950);

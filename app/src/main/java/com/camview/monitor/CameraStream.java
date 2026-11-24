@@ -95,6 +95,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     private boolean tunnelTried = false;
     /** VLC 已从 UDP 退回 TCP */
     private boolean vlcForceTcp = false;
+    /** 本轮流是否已经真的出过帧 */
+    private volatile boolean vlcGotFrame = false;
 
     private final Runnable fpsTick = new Runnable() {
         @Override
@@ -687,6 +689,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         stopVlc();
         state = ST_CONNECTING;
         lastError = "";
+        vlcGotFrame = false;
         try {
             if (libVlc == null) {
                 List<String> args = new ArrayList<>();
@@ -713,7 +716,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
             Media m = new Media(libVlc, Uri.parse(vurl));
             m.setHWDecoderEnabled(cfg.hwDecode, false);
             // 低延迟模式默认走 UDP（不再强制 TCP，隧道只做认证，不搬流）
-            boolean tcp = vlcForceTcp || (!cfg.lowLatency && cfg.rtspTcp);
+            boolean tcp = vlcForceTcp || !cfg.forceUdp;
             if (tcp) m.addOption(":rtsp-tcp");
             m.addOption(":network-caching=" + Math.max(0, cfg.cacheMs));
             m.addOption(":live-caching=" + Math.max(0, cfg.cacheMs));
@@ -741,6 +744,25 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         }
     }
 
+    private final Runnable vlcWatchdog = new Runnable() {
+        @Override
+        public void run() {
+            if (released || !vlcMode || vlcGotFrame) return;
+            if (vlcForceTcp) return;
+            Log.w(TAG, info.ip + " 8 秒无画面 → 从 UDP 退回 TCP");
+            vlcForceTcp = true;
+            lastError = "";
+            state = ST_CONNECTING;
+            stopVlc();
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (!released && vlcMode) startVlc();
+                }
+            }, 500);
+        }
+    };
+
     private void onVlcEvent(MediaPlayer.Event event) {
         if (!vlcMode) return;
         switch (event.type) {
@@ -748,17 +770,21 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 state = ST_LIVE;
                 retryCount = 0;
                 updateVlcVideoSize();
+                // 看门狗：UDP 下 RTSP 握手成功但 RTP 收不到时，画面永远黑 →
+                // 8 秒没出帧就自动退回 TCP 重来一次
+                handler.postDelayed(vlcWatchdog, 8000);
                 break;
             case MediaPlayer.Event.Buffering:
             case MediaPlayer.Event.Opening:
                 if (state != ST_LIVE) state = ST_CONNECTING;
                 break;
             case MediaPlayer.Event.Vout:
+                vlcGotFrame = true;
                 updateVlcVideoSize();
                 resizeVlcWindow();
                 break;
             case MediaPlayer.Event.EncounteredError:
-                if (!vlcForceTcp && cfg.lowLatency) {
+                if (!vlcForceTcp && cfg.forceUdp) {
                     // UDP 播不了 → 退回 TCP 再试一次（UDP 在某设备/网络下可能被丢）
                     vlcForceTcp = true;
                     lastError = "";
