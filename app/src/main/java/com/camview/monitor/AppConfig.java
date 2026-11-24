@@ -265,6 +265,18 @@ public class AppConfig {
         save();
     }
 
+    /** 批量设置认证方式（"" 自动 / "basic" 全部走 Basic 隧道） */
+    public synchronized int setAllAuthMode(String mode) {
+        int n = 0;
+        for (CameraInfo c : cameras) {
+            c.authMode = mode == null ? "" : mode;
+            n++;
+        }
+        revision++;
+        save();
+        return n;
+    }
+
     /** 修改某台摄像头的账号密码 */
     public synchronized void setCameraCredentials(String ip, String user, String password) {
         CameraInfo c = findCamera(ip);

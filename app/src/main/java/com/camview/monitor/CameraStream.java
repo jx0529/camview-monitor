@@ -699,6 +699,11 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
             IVLCVout vout = p.getVLCVout();
             vout.setVideoView(textureView);
             vout.attachViews();
+            resetTextureFull();
+            try {
+                vout.setWindowSize(Math.max(1, holder.getWidth()), Math.max(1, holder.getHeight()));
+            } catch (Throwable ignored) {
+            }
             String vurl = buildUrl();
             if (useTunnel()) vurl = tunnelUrl(vurl);
             Log.i(TAG, info.ip + " VLC 地址: " + maskPassword(vurl));
@@ -740,6 +745,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 break;
             case MediaPlayer.Event.Vout:
                 updateVlcVideoSize();
+                resizeVlcWindow();
                 break;
             case MediaPlayer.Event.EncounteredError:
                 lastError = "播放失败：设备拒绝或码流不可解析";
@@ -764,7 +770,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 videoW = vt.width;
                 videoH = vt.height;
                 if (vt.frameRateDen > 0) streamRate = vt.frameRateNum / (float) vt.frameRateDen;
-                layoutVideo();
+                resizeVlcWindow();
             }
         } catch (Throwable ignored) {
         }
@@ -808,11 +814,19 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         textureView.setScaleX(flipH ? -1f : 1f);
         textureView.setScaleY(flipV ? -1f : 1f);
         layoutVideo();
+        if (vlcMode) resizeVlcWindow();
     }
 
     /** 按视频宽高比把画面装进容器，避免拉伸变形 */
     private void layoutVideo() {
-        if (textureView == null || holder == null || videoW <= 0 || videoH <= 0) return;
+        if (textureView == null || holder == null) return;
+        if (vlcMode) {
+            // VLC 自己按窗口大小做等比缩放，这里只需要把真实窗口尺寸告诉它
+            resetTextureFull();
+            resizeVlcWindow();
+            return;
+        }
+        if (videoW <= 0 || videoH <= 0) return;
         holder.post(new Runnable() {
             @Override
             public void run() {
@@ -839,6 +853,47 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 }
             }
         });
+    }
+
+    /** VLC 模式：TextureView 铺满容器，由 VLC 自己等比缩放 */
+    private void resetTextureFull() {
+        if (textureView == null || holder == null) return;
+        TextureView tv = textureView;
+        FrameLayout hd = holder;
+        hd.post(new Runnable() {
+            @Override
+            public void run() {
+                ViewGroup.LayoutParams lp = tv.getLayoutParams();
+                if (lp != null && (lp.width != ViewGroup.LayoutParams.MATCH_PARENT
+                        || lp.height != ViewGroup.LayoutParams.MATCH_PARENT)) {
+                    lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+                    lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+                    if (lp instanceof FrameLayout.LayoutParams) {
+                        ((FrameLayout.LayoutParams) lp).gravity = android.view.Gravity.CENTER;
+                    }
+                    tv.setLayoutParams(lp);
+                }
+                try {
+                    IVLCVout vout = vlcPlayer == null ? null : vlcPlayer.getVLCVout();
+                    if (vout != null && vout.areViewsAttached()) {
+                        vout.setWindowSize(Math.max(1, hd.getWidth()), Math.max(1, hd.getHeight()));
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+    }
+
+    /** 把容器真实像素尺寸告知 VLC（不给的话画面会缩成一条或错位） */
+    private void resizeVlcWindow() {
+        if (vlcPlayer == null || holder == null) return;
+        try {
+            IVLCVout vout = vlcPlayer.getVLCVout();
+            if (vout.areViewsAttached()) {
+                vout.setWindowSize(Math.max(1, holder.getWidth()), Math.max(1, holder.getHeight()));
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     public void setRotation(int angle) {

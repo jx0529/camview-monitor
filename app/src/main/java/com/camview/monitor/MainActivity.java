@@ -218,23 +218,98 @@ public class MainActivity extends Activity {
     }
 
     private void showMoreMenu() {
-        String[] items = {"重启所有摄像头", "检查更新", "导入电脑端配置", "关于 / 使用说明"};
+        String[] items = {"▦ 横屏四路同屏（选 4 路）", "重启所有摄像头", "🔐 全部改用 Basic 隧道（推荐）",
+                "♻ 全部改回自动认证", "检查更新", "导入电脑端配置", "关于 / 使用说明"};
         Ui.actionSheet(this, "更多", items, (index, text) -> {
             switch (index) {
                 case 0:
-                    restartAll();
+                    pickQuadCameras();
                     break;
                 case 1:
-                    UpdateChecker.check(this, false);
+                    restartAll();
                     break;
                 case 2:
-                    importConfig();
+                    setAllAuthMode("basic");
                     break;
                 case 3:
+                    setAllAuthMode("");
+                    break;
+                case 4:
+                    UpdateChecker.check(this, false);
+                    break;
+                case 5:
+                    importConfig();
+                    break;
+                case 6:
                     showAbout();
                     break;
             }
         });
+    }
+
+    /** 选 4 路进横屏同屏 */
+    private void pickQuadCameras() {
+        List<String> groupIps = cfg.groups.get(cfg.currentGroup);
+        if (groupIps == null) groupIps = new ArrayList<>();
+        if (groupIps.isEmpty()) {
+            Ui.toast(this, "当前分组没有摄像头");
+            return;
+        }
+        final String[] arr = groupIps.toArray(new String[0]);
+        final boolean[] checked = new boolean[arr.length];
+        // 默认勾选当前页的前 4 路
+        int start = cfg.currentPage * cfg.itemsPerPage;
+        for (int i = 0; i < 4 && start + i < arr.length; i++) checked[start + i] = true;
+
+        AlertDialog.Builder b = Ui.dialog(this);
+        b.setTitle("选 4 路横屏同屏");
+        b.setMultiChoiceItems(arr, checked, (d, which, isChecked) -> {
+            checked[which] = isChecked;
+            int n = 0;
+            for (boolean c : checked) if (c) n++;
+            if (n > 4) {
+                checked[which] = false;
+                ((AlertDialog) d).getListView().setItemChecked(which, false);
+                Ui.toast(this, "最多选 4 路");
+            }
+        });
+        b.setPositiveButton("打开", (d, w) -> {
+            List<String> sel = new ArrayList<>();
+            for (int i = 0; i < arr.length && sel.size() < 4; i++) if (checked[i]) sel.add(arr[i]);
+            if (sel.size() < 4) {
+                Ui.toast(this, "请选满 4 路（选中 " + sel.size() + " 路）");
+                return;
+            }
+            Intent i = new Intent(this, QuadActivity.class);
+            i.putStringArrayListExtra("ips", new ArrayList<>(sel));
+            startActivity(i);
+        });
+        b.setNegativeButton("取消", null);
+        b.show();
+    }
+
+    /** 一键把全部摄像头切换认证方式（Basic 隧道 / 自动） */
+    private void setAllAuthMode(String mode) {
+        final int total = cfg.totalCameraCount();
+        if (total == 0) {
+            Ui.toast(this, "还没有摄像头");
+            return;
+        }
+        String title = mode.equals("basic") ? "全部改用 Basic 隧道" : "全部改回自动认证";
+        String msg = mode.equals("basic")
+                ? "将把全部 " + total + " 个摄像头改成 Basic 注入隧道播放（设备只认 Basic 时用）。\n改完会刷新并重连，确认继续？"
+                : "将把全部 " + total + " 个摄像头改回自动认证（Media3 优先）。\n确认继续？";
+        new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle(title)
+                .setMessage(msg)
+                .setPositiveButton("确定", (d, w) -> {
+                    cfg.setAllAuthMode(mode);
+                    refreshAll();
+                    restartAll();
+                    Ui.toast(this, "已应用：" + title + "（" + total + " 路）");
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     // ==================== 分组 ====================

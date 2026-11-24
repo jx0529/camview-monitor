@@ -1,6 +1,6 @@
 {
-  "version": "1.0.9",
-  "notes": "Basic 认证设备改为 VLC(ffmpeg内核)+隧道播放；隧道支持强制替换 Digest 为 Basic",
-  "apk_path": "release/camview-monitor-1.0.9.apk",
-  "size": 23744914
+  "version": "1.0.11",
+  "notes": "修复VLC全屏画面缩成底部一条(setWindowSize)；新增横屏四路同屏(2x2)；一键全部改用Basic隧道",
+  "apk_path": "release/camview-monitor-1.0.11.apk",
+  "size": 23748234
 }

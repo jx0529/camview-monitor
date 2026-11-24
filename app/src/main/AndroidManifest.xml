@@ -46,6 +46,14 @@
             android:exported="false"
             android:theme="@style/Theme.CamView.Fullscreen" />
 
+        <activity
+            android:name=".QuadActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:exported="false"
+            android:label="四路同屏"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.CamView.Fullscreen" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
