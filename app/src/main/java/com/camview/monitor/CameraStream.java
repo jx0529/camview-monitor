@@ -101,6 +101,9 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     private boolean vlcForceTcp = false;
     /** 本轮流是否已经真的出过帧 */
     private volatile boolean vlcGotFrame = false;
+    /** VLC 播放时间是否在推进（有推进 = 确实在出画面） */
+    private volatile boolean vlcAliveSignal = false;
+    private long lastVlcTime = -1;
     /** 硬解（MediaCodec）失败过一次 → 本流改走软解 */
     private boolean vlcHwOff = false;
 
@@ -114,6 +117,19 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 fps = frames * 1000f / dt;
                 frames = 0;
                 fpsStart = now;
+            }
+            // VLC 模式下 Vout 事件只触发一次，不能靠它做帧统计：
+            // 用播放时间是否推进来判断“确实在出画面”
+            if (vlcMode && vlcPlayer != null) {
+                try {
+                    long t = vlcPlayer.getTime();
+                    if (t > 0 && t != lastVlcTime) {
+                        lastVlcTime = t;
+                        vlcAliveSignal = true;
+                        lastFrameTs = now;
+                    }
+                } catch (Throwable ignored) {
+                }
             }
             if (!released) handler.postDelayed(this, 1000);
         }
@@ -598,6 +614,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     public boolean noFrame() {
         if (!active) return false;
         if (state != ST_LIVE) return false;
+        // VLC 通道：只有确认过“播放时间在推进”才敢判黑屏，否则容易把正常画面误判
+        if (isVlcMode() && !vlcAliveSignal) return false;
         if (lastFrameTs == 0L) {
             // 刚连上还没出过帧：从连接成功那刻算起
             return connectTs > 0 && System.currentTimeMillis() - connectTs > 20000;
@@ -710,6 +728,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
         state = ST_CONNECTING;
         lastError = "";
         vlcGotFrame = false;
+        vlcAliveSignal = false;
+        lastVlcTime = -1;
         try {
             if (libVlc == null) {
                 List<String> args = new ArrayList<>();
@@ -840,6 +860,10 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 lastError = "播放失败：设备拒绝或码流不可解析";
                 state = ST_FAILED;
                 scheduleReconnect();
+                break;
+            case MediaPlayer.Event.TimeChanged:
+                vlcAliveSignal = true;
+                lastFrameTs = System.currentTimeMillis();
                 break;
             case MediaPlayer.Event.EndReached:
                 state = ST_FAILED;

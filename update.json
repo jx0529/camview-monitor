@@ -1,6 +1,6 @@
 {
-  "version": "1.0.28",
-  "notes": "流畅度优化：强制MediaCodec硬解(失败自动回退软解)、限制同时解码路数(默认6,可调2-不限)、行状态刷新降频",
-  "apk_path": "release/camview-monitor-1.0.28.apk",
-  "size": 23778350
+  "version": "1.0.29",
+  "notes": "修复有画面却提示无画面：VLC的Vout事件只触发一次，改用播放时间推进判定是否真在出帧，拿不到信号不再误判",
+  "apk_path": "release/camview-monitor-1.0.29.apk",
+  "size": 23778298
 }
