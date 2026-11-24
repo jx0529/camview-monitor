@@ -1,6 +1,6 @@
 {
-  "version": "1.0.15",
-  "notes": "修复竖屏/VLC模式误显示“已连接，等待画面…”遮住画面的问题",
-  "apk_path": "release/camview-monitor-1.0.15.apk",
-  "size": 23750142
+  "version": "1.0.16",
+  "notes": "横屏四路新增左侧滑出抽屉：分组一键切换、重连本页、本组首屏、切竖屏、设置、回主界面",
+  "apk_path": "release/camview-monitor-1.0.16.apk",
+  "size": 23759502
 }

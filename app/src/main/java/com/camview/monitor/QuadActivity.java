@@ -11,6 +11,7 @@ import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -32,6 +33,14 @@ public class QuadActivity extends Activity {
     private LinearLayout grid;
     private TextView prevBtn, nextBtn, pageLabel;
     private boolean bound = false;
+
+    /** 左侧抽屉：分组切换 + 常用功能 */
+    private LinearLayout drawer;
+    private View scrim;
+    private LinearLayout groupBox;
+    private TextView menuBtn, drawerGroupLabel;
+    private boolean drawerOpen = false;
+    private int drawerW = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -99,6 +108,178 @@ public class QuadActivity extends Activity {
 
         root.addView(nav, nlp);
         root.addView(close, clp);
+
+        // 左上角的小菜单按钮（不抢画面，44×36 半透明）
+        menuBtn = new TextView(this);
+        menuBtn.setText("☰");
+        menuBtn.setTextSize(18);
+        menuBtn.setTextColor(Color.WHITE);
+        menuBtn.setGravity(Gravity.CENTER);
+        menuBtn.setBackgroundColor(0x66000000);
+        FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(Ui.dp(this, 44), Ui.dp(this, 36));
+        mlp.gravity = Gravity.TOP | Gravity.LEFT;
+        mlp.topMargin = Ui.dp(this, 6);
+        mlp.leftMargin = Ui.dp(this, 6);
+        menuBtn.setOnClickListener(v -> toggleDrawer());
+        root.addView(menuBtn, mlp);
+
+        buildDrawer();
+    }
+
+    private void buildDrawer() {
+        drawerW = Ui.dp(this, 200);
+
+        // 抽屉外的遮罩，点一下收起
+        scrim = new View(this);
+        scrim.setBackgroundColor(0x66000000);
+        scrim.setVisibility(View.GONE);
+        scrim.setOnClickListener(v -> closeDrawer());
+        root.addView(scrim, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        drawer = new LinearLayout(this);
+        drawer.setOrientation(LinearLayout.VERTICAL);
+        drawer.setBackgroundColor(0xF2161B22);
+        drawer.setPadding(Ui.dp(this, 10), Ui.dp(this, 8), Ui.dp(this, 10), Ui.dp(this, 8));
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = new TextView(this);
+        title.setText("分组");
+        title.setTextColor(0xFF58A6FF);
+        title.setTextSize(14);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        head.addView(title, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView closeBtn = new TextView(this);
+        closeBtn.setText("‹");
+        closeBtn.setTextSize(18);
+        closeBtn.setTextColor(0xFF8B949E);
+        closeBtn.setGravity(Gravity.CENTER);
+        closeBtn.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 8), 0);
+        closeBtn.setOnClickListener(v -> closeDrawer());
+        head.addView(closeBtn, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(this, 28)));
+        drawer.addView(head, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        ScrollView scroll = new ScrollView(this);
+        groupBox = new LinearLayout(this);
+        groupBox.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(groupBox, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        drawer.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        drawerGroupLabel = new TextView(this);
+        drawerGroupLabel.setTextColor(0xFF8B949E);
+        drawerGroupLabel.setTextSize(11);
+        drawerGroupLabel.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 4));
+        drawer.addView(drawerGroupLabel);
+
+        // 常用功能（“该有的功能也在里面”）
+        drawer.addView(drawerAction("↻ 重连本页", this::reconnectPage));
+        drawer.addView(drawerAction("⇆ 本组首屏", () -> {
+            base = 0;
+            loadPage();
+            closeDrawer();
+        }));
+        drawer.addView(drawerAction("⛶ 竖屏浏览", () -> {
+            setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            finish();
+        }));
+        drawer.addView(drawerAction("⚙ 设置", () -> {
+            closeDrawer();
+            startActivity(new Intent(this, SettingsActivity.class));
+        }));
+        drawer.addView(drawerAction("⌂ 回主界面", () -> finish()));
+
+        FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(drawerW,
+                FrameLayout.LayoutParams.MATCH_PARENT);
+        dlp.gravity = Gravity.TOP | Gravity.LEFT;
+        drawer.setTranslationX(-drawerW);
+        drawer.setVisibility(View.INVISIBLE);
+        root.addView(drawer, dlp);
+    }
+
+    private TextView drawerAction(String text, Runnable run) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(0xFFC9D1D9);
+        t.setTextSize(13);
+        t.setPadding(Ui.dp(this, 4), Ui.dp(this, 9), Ui.dp(this, 4), Ui.dp(this, 9));
+        t.setOnClickListener(v -> run.run());
+        return t;
+    }
+
+    private void toggleDrawer() {
+        if (drawerOpen) closeDrawer();
+        else openDrawer();
+    }
+
+    private void openDrawer() {
+        if (drawer == null) return;
+        drawerOpen = true;
+        refreshGroupList();
+        scrim.setVisibility(View.VISIBLE);
+        scrim.setAlpha(0f);
+        scrim.animate().alpha(1f).setDuration(180).start();
+        drawer.setVisibility(View.VISIBLE);
+        drawer.animate().translationX(0f).setDuration(180).start();
+    }
+
+    private void closeDrawer() {
+        if (drawer == null || !drawerOpen) return;
+        drawerOpen = false;
+        scrim.animate().alpha(0f).setDuration(160).withEndAction(
+                () -> scrim.setVisibility(View.GONE)).start();
+        drawer.animate().translationX(-drawerW).setDuration(160).withEndAction(
+                () -> drawer.setVisibility(View.INVISIBLE)).start();
+    }
+
+    private void reconnectPage() {
+        for (CameraStream s : streams) {
+            try {
+                s.setActive(true);
+                s.restart();
+            } catch (Throwable ignored) { }
+        }
+        closeDrawer();
+    }
+
+    private void refreshGroupList() {
+        if (groupBox == null) return;
+        groupBox.removeAllViews();
+        for (String g : App.cfg().groups.keySet()) {
+            List<String> ips = App.cfg().groups.get(g);
+            boolean cur = g.equals(groupName);
+            TextView item = new TextView(this);
+            item.setText((cur ? "● " : "○ ") + g + "  " + (ips == null ? 0 : ips.size()));
+            item.setTextSize(13);
+            item.setTextColor(cur ? 0xFF58A6FF : 0xFFC9D1D9);
+            item.setPadding(Ui.dp(this, 4), Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8));
+            if (cur) item.setBackgroundColor(0x22FFFFFF);
+            final String target = g;
+            item.setOnClickListener(v -> switchGroup(target));
+            groupBox.addView(item, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+        drawerGroupLabel.setText("当前：" + groupName + " · " + groupIps().size() + " 路");
+    }
+
+    private void switchGroup(String g) {
+        if (g == null || g.equals(groupName)) {
+            closeDrawer();
+            return;
+        }
+        groupName = g;
+        App.cfg().currentGroup = g;
+        base = 0;
+        App.cfg().save();
+        loadPage();
+        refreshGroupList();
+        closeDrawer();
     }
 
     private TextView makeNavButton(String text) {
