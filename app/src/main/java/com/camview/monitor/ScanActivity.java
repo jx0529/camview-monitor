@@ -38,7 +38,15 @@ public class ScanActivity extends Activity {
     private LinearLayout resultContainer;
 
     private final List<String> found = new ArrayList<>();
-    private final Map<String, CheckBox> checkboxes = new LinkedHashMap<>();
+    /** ip -> 是否勾选（已添加的不进这里） */
+    private final Map<String, Boolean> selected = new LinkedHashMap<>();
+    private final Map<String, TextView> rowViews = new LinkedHashMap<>();
+    /** 已在配置里出现过的 IP（任何分组），扫描结果里直接忽略 */
+    private final List<String> alreadyAdded = new ArrayList<>();
+    /** “勾选到这里”的起点 */
+    private String anchorIp = null;
+    private TextView hintLabel;
+    private TextView addBtnRef;
     private volatile boolean cancel = false;
     private ExecutorService pool;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -135,8 +143,25 @@ public class ScanActivity extends Activity {
         resultLabel = new TextView(this);
         resultLabel.setTextColor(0xFF58A6FF);
         resultLabel.setTextSize(13);
-        resultLabel.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 6));
+        resultLabel.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 4));
         root.addView(resultLabel);
+
+        LinearLayout selRow = new LinearLayout(this);
+        selRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams selp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 34));
+        selp.topMargin = Ui.dp(this, 4);
+        root.addView(selRow, selp);
+        selRow.addView(selButton("全选", () -> selectAll()), new LinearLayout.LayoutParams(0, Ui.dp(this, 34), 1f));
+        selRow.addView(selButton("反选", () -> invert()), new LinearLayout.LayoutParams(0, Ui.dp(this, 34), 1f));
+        selRow.addView(selButton("清空", () -> clearSelection()), new LinearLayout.LayoutParams(0, Ui.dp(this, 34), 1f));
+
+        hintLabel = new TextView(this);
+        hintLabel.setTextColor(0xFF8B949E);
+        hintLabel.setTextSize(11);
+        hintLabel.setPadding(0, Ui.dp(this, 4), 0, 0);
+        hintLabel.setText("点一行 = 勾选/取消；长按一行设起点，再长按另一行 = 勾选这一段");
+        root.addView(hintLabel);
 
         ScrollView resultScroll = new ScrollView(this);
         resultScroll.setBackgroundResource(R.drawable.bg_panel);
@@ -165,6 +190,7 @@ public class ScanActivity extends Activity {
         alp.rightMargin = Ui.dp(this, 8);
         addBtn.setLayoutParams(alp);
         addBtn.setOnClickListener(v -> addSelected());
+        addBtnRef = addBtn;
         btnRow.addView(addBtn);
 
         Button cancelBtn = new Button(this);
@@ -197,6 +223,17 @@ public class ScanActivity extends Activity {
         v.setTextSize(12);
         v.setPadding(0, Ui.dp(this, 10), 0, 0);
         return v;
+    }
+
+    private TextView selButton(String text, Runnable run) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(13);
+        t.setTextColor(0xFF58A6FF);
+        t.setGravity(Gravity.CENTER);
+        t.setBackgroundResource(R.drawable.bg_toolbar_button);
+        t.setOnClickListener(v -> run.run());
+        return t;
     }
 
     private Button plainButton(String text) {
@@ -232,7 +269,9 @@ public class ScanActivity extends Activity {
     private void runScan(final List<String> ips) {
         cancel = false;
         found.clear();
-        checkboxes.clear();
+        selected.clear();
+        rowViews.clear();
+        anchorIp = null;
         resultContainer.removeAllViews();
         resultLabel.setText("正在扫描…");
         bar.setMax(ips.size());
@@ -300,21 +339,35 @@ public class ScanActivity extends Activity {
             snapshot = new ArrayList<>(found);
         }
         java.util.Collections.sort(snapshot, (a, b) -> Long.compare(AppConfig.ipValue(a), AppConfig.ipValue(b)));
-        resultLabel.setText("发现 " + snapshot.size() + " 个可用摄像头（已全选，可取消勾选）");
+
+        // 已添加过的（任何分组里出现过的 IP）直接忽略
+        alreadyAdded.clear();
+        List<String> existing = cfg.allIps();
+        for (String ip : existing) {
+            if (!alreadyAdded.contains(ip)) alreadyAdded.add(ip);
+        }
+
         resultContainer.removeAllViews();
-        checkboxes.clear();
+        rowViews.clear();
+        selected.clear();
+        anchorIp = null;
+
+        int newCount = 0;
         for (String ip : snapshot) {
-            TextView row = new TextView(this);
-            row.setText("●  " + ip + "   :554");
-            row.setTextColor(0xFFC9D1D9);
-            row.setTextSize(13);
-            row.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
-            row.setBackgroundResource(R.drawable.bg_input);
+            boolean added = alreadyAdded.contains(ip);
+            if (!added) {
+                newCount++;
+                selected.put(ip, Boolean.TRUE);   // 新设备默认勾选
+            }
+            View row = buildResultRow(ip, added);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.topMargin = Ui.dp(this, 6);
             resultContainer.addView(row, lp);
         }
+
+        resultLabel.setText("发现 " + snapshot.size() + " 个可用摄像头 · 新 " + newCount
+                + " 个 / 已添加忽略 " + (snapshot.size() - newCount) + " 个");
         if (snapshot.isEmpty()) {
             TextView none = new TextView(this);
             none.setText("没有发现 554 端口开放的设备，检查网段是否和摄像头在同一局域网。");
@@ -323,7 +376,120 @@ public class ScanActivity extends Activity {
             none.setPadding(Ui.dp(this, 8), Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 12));
             resultContainer.addView(none);
         }
-        Ui.toast(this, "发现 " + snapshot.size() + " 个摄像头");
+        refreshCounts();
+        Ui.toast(this, "发现 " + snapshot.size() + " 个，其中新设备 " + newCount + " 个");
+    }
+
+    private View buildResultRow(final String ip, boolean added) {
+        TextView row = new TextView(this);
+        row.setTextColor(0xFFC9D1D9);
+        row.setTextSize(13);
+        row.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
+        row.setBackgroundResource(R.drawable.bg_input);
+        rowViews.put(ip, row);
+
+        if (added) {
+            row.setText("✔  " + ip + "   :554   （已添加，已忽略）");
+            row.setTextColor(0xFF6E7681);
+            row.setOnClickListener(v -> Ui.toast(this, ip + " 已经在列表里了，可到主界面删除后再添加"));
+            return row;
+        }
+
+        row.setOnClickListener(v -> {
+            boolean now = !(selected.get(ip) == Boolean.TRUE);
+            selected.put(ip, now);
+            paintRow(ip, false);
+            refreshCounts();
+        });
+        row.setOnLongClickListener(v -> {
+            if (anchorIp == null) {
+                anchorIp = ip;
+                paintRow(ip, false);
+                hintLabel.setText("起点： " + ip + "  → 再长按另一行，勾选这一段");
+                Ui.toast(this, "已设起点 " + ip);
+            } else {
+                rangeSelect(anchorIp, ip);
+                anchorIp = null;
+            }
+            return true;
+        });
+        paintRow(ip, false);
+        return row;
+    }
+
+    private void paintRow(String ip, boolean isAnchor) {
+        TextView row = rowViews.get(ip);
+        if (row == null) return;
+        if (alreadyAdded.contains(ip)) return;
+        boolean on = selected.get(ip) == Boolean.TRUE;
+        boolean anchor = ip.equals(anchorIp);
+        row.setText((on ? "☑  " : "☐  ") + ip + "   :554" + (anchor ? "    ← 起点" : ""));
+        row.setTextColor(on ? 0xFF58A6FF : 0xFFC9D1D9);
+        row.setBackgroundResource(on ? R.drawable.bg_input_sel : R.drawable.bg_input);
+    }
+
+    /** 把 from~to 之间（按当前排序）所有未添加设备勾上 */
+    private void rangeSelect(String from, String to) {
+        List<String> order = new ArrayList<>();
+        synchronized (found) {
+            order.addAll(found);
+        }
+        java.util.Collections.sort(order, (a, b) -> Long.compare(AppConfig.ipValue(a), AppConfig.ipValue(b)));
+        int i = order.indexOf(from), j = order.indexOf(to);
+        if (i < 0 || j < 0) return;
+        if (i > j) { int t = i; i = j; j = t; }
+        int n = 0;
+        for (int k = i; k <= j; k++) {
+            String ip = order.get(k);
+            if (alreadyAdded.contains(ip)) continue;
+            selected.put(ip, Boolean.TRUE);
+            paintRow(ip, false);
+            n++;
+        }
+        paintRow(from, false);
+        hintLabel.setText("已勾选 " + order.get(i) + " ~ " + order.get(j) + " 共 " + n + " 个");
+        refreshCounts();
+    }
+
+    private void selectAll() {
+        for (String ip : rowViews.keySet()) {
+            if (alreadyAdded.contains(ip)) continue;
+            selected.put(ip, Boolean.TRUE);
+            paintRow(ip, false);
+        }
+        refreshCounts();
+    }
+
+    private void invert() {
+        for (String ip : rowViews.keySet()) {
+            if (alreadyAdded.contains(ip)) continue;
+            selected.put(ip, !(selected.get(ip) == Boolean.TRUE));
+            paintRow(ip, false);
+        }
+        refreshCounts();
+    }
+
+    private void clearSelection() {
+        for (String ip : rowViews.keySet()) {
+            if (alreadyAdded.contains(ip)) continue;
+            selected.put(ip, Boolean.FALSE);
+            paintRow(ip, false);
+        }
+        anchorIp = null;
+        refreshCounts();
+    }
+
+    private int selectedCount() {
+        int n = 0;
+        for (Map.Entry<String, Boolean> e : selected.entrySet()) {
+            if (e.getValue() == Boolean.TRUE && !alreadyAdded.contains(e.getKey())) n++;
+        }
+        return n;
+    }
+
+    private void refreshCounts() {
+        int n = selectedCount();
+        if (addBtnRef != null) addBtnRef.setText("✅ 添加选中（" + n + "）");
     }
 
     private boolean probe(String ip, int port, int timeoutMs) {
@@ -342,17 +508,18 @@ public class ScanActivity extends Activity {
     }
 
     private void addSelected() {
-        List<String> snapshot;
-        synchronized (found) {
-            snapshot = new ArrayList<>(found);
+        List<String> ips = new ArrayList<>();
+        for (Map.Entry<String, Boolean> e : selected.entrySet()) {
+            if (e.getValue() == Boolean.TRUE && !alreadyAdded.contains(e.getKey())) ips.add(e.getKey());
         }
-        if (snapshot.isEmpty()) {
-            Ui.toast(this, "没有可添加的摄像头");
+        if (ips.isEmpty()) {
+            Ui.toast(this, "还没有勾选任何新摄像头");
             return;
         }
+        java.util.Collections.sort(ips, (a, b) -> Long.compare(AppConfig.ipValue(a), AppConfig.ipValue(b)));
         String user = userInput.getText().toString().trim();
         String pwd = pwdInput.getText().toString().trim();
-        int added = cfg.addCameras(snapshot, user, pwd);
+        int added = cfg.addCameras(ips, user, pwd);
         Ui.toast(this, "已添加 " + added + " 个摄像头到「" + cfg.currentGroup + "」");
         finish();
     }
