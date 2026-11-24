@@ -46,6 +46,10 @@ public class CheckActivity extends Activity {
     private final List<CameraStream> live = new ArrayList<>();
     private final Handler ui = new Handler(Looper.getMainLooper());
 
+    private final List<FrameLayout> cellHolders = new ArrayList<>();
+    private final List<android.view.TextureView> cellViews = new ArrayList<>();
+    private final List<TextView> cellTags = new ArrayList<>();
+
     private int cursor = 0;
     private boolean stopped = false;
     private boolean running = false;
@@ -188,6 +192,9 @@ public class CheckActivity extends Activity {
 
     private void buildGrid() {
         gridBox.removeAllViews();
+        cellHolders.clear();
+        cellViews.clear();
+        cellTags.clear();
         for (int r = 0; r < 2; r++) {
             LinearLayout line = new LinearLayout(this);
             line.setOrientation(LinearLayout.HORIZONTAL);
@@ -196,9 +203,14 @@ public class CheckActivity extends Activity {
             for (int c = 0; c < 3; c++) {
                 FrameLayout cell = new FrameLayout(this);
                 cell.setBackgroundColor(0xFF010409);
+
+                FrameLayout holder = new FrameLayout(this);
+                cell.addView(holder, new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                 android.view.TextureView tv = new android.view.TextureView(this);
-                cell.addView(tv, new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                holder.addView(tv, new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
                 TextView tag = new TextView(this);
                 tag.setText("");
                 tag.setTextColor(0xFFC9D1D9);
@@ -209,7 +221,11 @@ public class CheckActivity extends Activity {
                         FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
                 lp.gravity = Gravity.TOP | Gravity.LEFT;
                 cell.addView(tag, lp);
-                cell.setTag(tv);
+
+                cellHolders.add(holder);
+                cellViews.add(tv);
+                cellTags.add(tag);
+
                 LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0,
                         ViewGroup.LayoutParams.MATCH_PARENT, 1f);
                 clp.leftMargin = 2;
@@ -217,17 +233,6 @@ public class CheckActivity extends Activity {
                 line.addView(cell, clp);
             }
         }
-    }
-
-    private List<FrameLayout> cells() {
-        List<FrameLayout> out = new ArrayList<>();
-        for (int r = 0; r < gridBox.getChildCount(); r++) {
-            LinearLayout line = (LinearLayout) gridBox.getChildAt(r);
-            for (int c = 0; c < line.getChildCount(); c++) {
-                out.add((FrameLayout) line.getChildAt(c));
-            }
-        }
-        return out;
     }
 
     private void checkBatch() {
@@ -239,92 +244,97 @@ public class CheckActivity extends Activity {
             finishCheck("检测完成");
             return;
         }
-        List<CameraStream> prev = new ArrayList<>(live);
-        live.clear();
-        for (CameraStream s : prev) {
-            try { s.release(); } catch (Throwable ignored) { }
-        }
-
-        int shown = Math.min(PER_BATCH, queue.size() - cursor);
-        final List<String> batchIps = new ArrayList<>();
-        List<FrameLayout> cells = cells();
-        for (int i = 0; i < cells.size(); i++) {
-            FrameLayout cell = cells.get(i);
-            TextView tag = (TextView) cell.getChildAt(1);
-            android.view.TextureView tv = (android.view.TextureView) cell.getTag();
-            if (i >= shown) {
-                tag.setText("");
-                continue;
+        try {
+            for (CameraStream s : live) {
+                try { s.release(); } catch (Throwable ignored) { }
             }
-            String ip = queue.get(cursor + i);
-            batchIps.add(ip);
-            tag.setText(ip);
-            CameraInfo info = cfg.findCamera(ip);
-            if (info == null) info = cfg.getOrCreateCamera(ip);
-            CameraStream s = new CameraStream(this, cfg, info);
-            s.rotation = info.rotation;
-            s.flipH = info.flipH;
-            s.flipV = info.flipV;
-            live.add(s);
-            final CameraStream fs = s;
-            final android.view.TextureView ftv = tv;
-            final FrameLayout fcell = cell;
-            cell.post(new Runnable() {
+            live.clear();
+            buildGrid();
+
+            int shown = Math.min(PER_BATCH, queue.size() - cursor);
+            final List<String> batchIps = new ArrayList<>();
+            for (int i = 0; i < cellTags.size(); i++) {
+                if (i >= shown) continue;
+                final String ip = queue.get(cursor + i);
+                batchIps.add(ip);
+                cellTags.get(i).setText(ip);
+
+                CameraInfo info = cfg.findCamera(ip);
+                if (info == null) info = cfg.getOrCreateCamera(ip);
+                CameraStream s = new CameraStream(this, cfg, info);
+                s.rotation = info.rotation;
+                s.flipH = info.flipH;
+                s.flipV = info.flipV;
+                live.add(s);
+
+                final CameraStream fs = s;
+                final android.view.TextureView ftv = cellViews.get(i);
+                final FrameLayout fholder = cellHolders.get(i);
+                cellHolders.get(i).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (stopped) return;
+                        try {
+                            fs.attach(ftv, fholder);
+                            fs.setActive(true);
+                        } catch (Throwable t) {
+                            android.util.Log.w("CheckActivity", "attach fail " + ip, t);
+                        }
+                    }
+                });
+            }
+
+            progressLabel.setText("连接中 " + Math.min(cursor + shown, queue.size()) + " / " + queue.size()
+                    + " · 已失败 " + bad.size());
+
+            final long deadline = System.currentTimeMillis() + BATCH_WAIT_MS;
+            ui.postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    FrameLayout holder = new FrameLayout(CheckActivity.this);
-                    holder.setLayoutParams(new FrameLayout.LayoutParams(
-                            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-                    fcell.addView(holder, 0);
-                    fs.attach(ftv, holder);
-                    fs.setActive(true);
-                }
-            });
-        }
-
-        progressLabel.setText("连接中 " + (cursor + shown) + " / " + queue.size()
-                + " · 已失败 " + bad.size());
-
-        final long deadline = System.currentTimeMillis() + BATCH_WAIT_MS;
-        ui.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                boolean allDecided = true;
-                for (CameraStream s : live) {
-                    if (s.state == CameraStream.ST_CONNECTING) {
-                        allDecided = false;
-                        break;
-                    }
-                }
-                if (!allDecided && System.currentTimeMillis() < deadline && !stopped) {
-                    ui.postDelayed(this, POLL_MS);
-                    return;
-                }
-                // 结算：连上（ST_LIVE）算正常，其余算连接失败
-                for (int i = 0; i < batchIps.size(); i++) {
-                    String ip = batchIps.get(i);
-                    CameraStream s = live.get(i);
-                    if (s.state == CameraStream.ST_LIVE) {
-                        okList.add(ip);
-                    } else {
-                        bad.add(ip);
-                        if (s.lastError != null && !s.lastError.isEmpty()) badReasons.put(ip, s.lastError);
-                    }
-                }
-                cursor += batchIps.size();
-                bar.setProgress(Math.min(cursor, queue.size()));
-                progressLabel.setText("已检测 " + Math.min(cursor, queue.size()) + " / " + queue.size()
-                        + " · 连接失败 " + bad.size());
-                if (!stopped) {
-                    ui.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            checkBatch();
+                    try {
+                        boolean allDecided = true;
+                        for (CameraStream st : live) {
+                            if (st.state == CameraStream.ST_CONNECTING) {
+                                allDecided = false;
+                                break;
+                            }
                         }
-                    });
+                        if (!allDecided && System.currentTimeMillis() < deadline && !stopped) {
+                            ui.postDelayed(this, POLL_MS);
+                            return;
+                        }
+                        for (int i = 0; i < batchIps.size() && i < live.size(); i++) {
+                            String ip = batchIps.get(i);
+                            CameraStream st = live.get(i);
+                            if (st.state == CameraStream.ST_LIVE) {
+                                okList.add(ip);
+                            } else {
+                                bad.add(ip);
+                                if (st.lastError != null && !st.lastError.isEmpty()) {
+                                    badReasons.put(ip, st.lastError);
+                                }
+                            }
+                        }
+                        cursor += batchIps.size();
+                        bar.setProgress(Math.min(cursor, queue.size()));
+                        progressLabel.setText("已检测 " + Math.min(cursor, queue.size()) + " / " + queue.size()
+                                + " · 连接失败 " + bad.size());
+                        if (!stopped) ui.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                checkBatch();
+                            }
+                        });
+                    } catch (Throwable t) {
+                        android.util.Log.w("CheckActivity", "batch settle fail", t);
+                        finishCheck("检测中断");
+                    }
                 }
-            }
-        }, POLL_MS);
+            }, POLL_MS);
+        } catch (Throwable t) {
+            android.util.Log.w("CheckActivity", "batch start fail", t);
+            finishCheck("检测中断");
+        }
     }
 
     private void finishCheck(String reason) {

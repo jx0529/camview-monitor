@@ -1,6 +1,6 @@
 {
-  "version": "1.0.23",
-  "notes": "体检改为按连接成功判定：能连上就算正常，连不上/报错即失败并显示原因；每批全部有结果立刻进入下一批，速度更快",
-  "apk_path": "release/camview-monitor-1.0.23.apk",
-  "size": 23775918
+  "version": "1.0.24",
+  "notes": "修复体检仅检测6路就退出：每批重建格子并直接持有视图引用，避免类型转换崩溃；全程加异常兜底",
+  "apk_path": "release/camview-monitor-1.0.24.apk",
+  "size": 23776046
 }
