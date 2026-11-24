@@ -236,8 +236,8 @@ public class MainActivity extends Activity {
     private TextView selectCountLabel;
 
     private void showMoreMenu() {
-        String[] items = {"▦ 横屏四路同屏（选 4 路）", "重启所有摄像头", "🔐 全部改用 Basic 隧道（推荐）",
-                "♻ 全部改回自动认证", "检查更新", "导入电脑端配置", "关于 / 使用说明"};
+        String[] items = {"▦ 横屏同屏（选路进 4/9 格）", "重启所有摄像头", "🔐 全部改用 Basic 隧道（推荐）",
+                "♻ 全部改回自动认证", "检查更新", "📥 导入配置（JSON）", "📤 导出配置（JSON 备份）", "关于 / 使用说明"};
         Ui.actionSheet(this, "更多", items, (index, text) -> {
             switch (index) {
                 case 0:
@@ -259,6 +259,9 @@ public class MainActivity extends Activity {
                     importConfig();
                     break;
                 case 6:
+                    exportConfig();
+                    break;
+                case 7:
                     showAbout();
                     break;
             }
@@ -1158,6 +1161,89 @@ public class MainActivity extends Activity {
     private void restartAll() {
         for (CameraRow r : rows) r.stream.restart();
         Ui.toast(this, "正在重新连接所有摄像头…");
+    }
+
+    /** 导出配置 JSON：写到可分享目录并拉起分享/保存面板 */
+    private void exportConfig() {
+        try {
+            String json = cfg.exportJson();
+            String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmm", Locale.US)
+                    .format(new Date());
+            String fileName = "camview-config-" + stamp + ".json";
+            java.io.File dir = getExternalFilesDir(null);
+            if (dir == null) dir = getFilesDir();
+            java.io.File out = new java.io.File(dir, fileName);
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+            fos.write(json.getBytes("UTF-8"));
+            fos.close();
+
+            // 同时复制一份到 下载/Download（老系统走外部存储根目录）
+            String extra = null;
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    android.content.ContentValues v = new android.content.ContentValues();
+                    v.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName);
+                    v.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/json");
+                    v.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                            android.os.Environment.DIRECTORY_DOWNLOADS);
+                    android.net.Uri uri = getContentResolver().insert(
+                            android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                    if (uri != null) {
+                        java.io.OutputStream os = getContentResolver().openOutputStream(uri);
+                        if (os != null) {
+                            os.write(json.getBytes("UTF-8"));
+                            os.close();
+                            extra = "已另存到「下载/" + fileName + "」";
+                        }
+                    }
+                } else {
+                    java.io.File dl = android.os.Environment.getExternalStoragePublicDirectory(
+                            android.os.Environment.DIRECTORY_DOWNLOADS);
+                    if (dl != null && (dl.exists() || dl.mkdirs())) {
+                        java.io.File copy = new java.io.File(dl, fileName);
+                        java.io.FileOutputStream c2 = new java.io.FileOutputStream(copy);
+                        c2.write(json.getBytes("UTF-8"));
+                        c2.close();
+                        extra = "已另存到「下载/" + fileName + "」";
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+
+            final android.net.Uri shareUri = androidx.core.content.FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", out);
+            String msg = "配置已导出\n\n" + fileName
+                    + "\n大小 " + (json.length() / 1024 + 1) + " KB"
+                    + "\n分组 " + cfg.groups.size() + " 个 · 摄像头 " + cfg.totalCameraCount() + " 个"
+                    + (extra == null ? "" : "\n" + extra);
+
+            AlertDialog d = Ui.dialog(this).setTitle("导出配置成功")
+                    .setMessage(msg)
+                    .setPositiveButton("分享 / 发送", (dd, w) -> {
+                        Intent send = new Intent(Intent.ACTION_SEND);
+                        send.setType("application/json");
+                        send.putExtra(Intent.EXTRA_STREAM, shareUri);
+                        send.putExtra(Intent.EXTRA_SUBJECT, fileName);
+                        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        try {
+                            startActivity(Intent.createChooser(send, "发送配置文件"));
+                        } catch (Exception e) {
+                            Ui.toast(this, "没有可用的分享应用");
+                        }
+                    })
+                    .setNeutralButton("复制到剪贴板", (dd, w) -> {
+                        android.content.ClipboardManager cm =
+                                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                        cm.setPrimaryClip(ClipData.newPlainText(fileName, json));
+                        Ui.toast(this, "配置 JSON 已复制，可粘贴到聊天/网盘");
+                    })
+                    .setNegativeButton("关闭", null)
+                    .create();
+            Ui.styleDialog(d);
+            d.show();
+        } catch (Throwable t) {
+            Ui.toast(this, "导出失败：" + t.getClass().getSimpleName());
+        }
     }
 
     private void importConfig() {

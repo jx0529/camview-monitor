@@ -1,6 +1,6 @@
 {
-  "version": "1.0.30",
-  "notes": "横屏同屏支持 4路(2x2) / 9路(3x3) 切换：设置页可选，四路页抽屉可一键切换，翻页步长与页码同步",
-  "apk_path": "release/camview-monitor-1.0.30.apk",
-  "size": 23779186
+  "version": "1.0.31",
+  "notes": "新增导出配置：更多菜单→导出JSON，自动存到应用目录与“下载”，可直接分享到微信/网盘或复制JSON文本；导入配置保留",
+  "apk_path": "release/camview-monitor-1.0.31.apk",
+  "size": 23780846
 }

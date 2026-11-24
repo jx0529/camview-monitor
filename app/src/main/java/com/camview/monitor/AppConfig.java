@@ -174,10 +174,10 @@ public class AppConfig {
         }
     }
 
-    public synchronized void save() {
-        revision++;
+    /** 生成完整配置 JSON（导出/备份用，与内部存档同一份结构） */
+    public synchronized org.json.JSONObject buildJson() {
+        JSONObject o = new JSONObject();
         try {
-            JSONObject o = new JSONObject();
             o.put("default_user", defaultUser);
             o.put("default_password", defaultPassword);
             o.put("max_cols", maxCols);
@@ -209,8 +209,25 @@ public class AppConfig {
             JSONArray ca = new JSONArray();
             for (CameraInfo c : cameras) ca.put(c.toJson());
             o.put("saved_cameras", ca);
+        } catch (Exception e) {
+            Log.w(TAG, "构建配置失败: " + e);
+        }
+        return o;
+    }
 
-            writeAll(file, o.toString(2));
+    /** 导出用：缩进格式的 JSON 文本 */
+    public synchronized String exportJson() {
+        try {
+            return buildJson().toString(2);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    public synchronized void save() {
+        revision++;
+        try {
+            writeAll(file, buildJson().toString(2));
         } catch (Exception e) {
             Log.w(TAG, "配置保存失败: " + e);
         }
