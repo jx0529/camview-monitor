@@ -1,6 +1,6 @@
 {
-  "version": "1.0.20",
-  "notes": "摄像头菜单新增多选：勾选本组任意多路→一键移动到其他分组或批量删除（含全选/清空）",
-  "apk_path": "release/camview-monitor-1.0.20.apk",
-  "size": 23769786
+  "version": "1.0.21",
+  "notes": "修复多选面板闪退：改用独立自定义对话框重写，加异常兜底与实时勾选计数",
+  "apk_path": "release/camview-monitor-1.0.21.apk",
+  "size": 23770394
 }

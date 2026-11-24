@@ -19,8 +19,8 @@ android {
         applicationId "com.camview.monitor"
         minSdk 24
         targetSdk 34
-        versionCode 20
-        versionName "1.0.20"
+        versionCode 21
+        versionName "1.0.21"
         ndk {
             // 只保留 64 位（现在手机基本都是 arm64），否则 VLC 原生库会让包体翻倍
             abiFilters 'arm64-v8a'

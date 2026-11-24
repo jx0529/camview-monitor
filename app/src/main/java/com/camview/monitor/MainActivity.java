@@ -2,6 +2,7 @@ package com.camview.monitor;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -504,96 +505,138 @@ public class MainActivity extends Activity {
 
     /** 多选面板：勾选本组摄像头 → 批量移动到其他分组 / 批量删除 */
     private void openMultiSelect() {
-        List<String> ips = cfg.groups.get(cfg.currentGroup);
-        if (ips == null || ips.isEmpty()) {
-            Ui.toast(this, "当前分组没有摄像头");
-            return;
-        }
-        final List<String> list = new ArrayList<>(ips);
-        java.util.Collections.sort(list, (a, b) -> Long.compare(AppConfig.ipValue(a), AppConfig.ipValue(b)));
-        final CheckBox[] boxes = new CheckBox[list.size()];
+        try {
+            List<String> ips = cfg.groups.get(cfg.currentGroup);
+            if (ips == null || ips.isEmpty()) {
+                Ui.toast(this, "当前分组没有摄像头");
+                return;
+            }
+            final List<String> list = new ArrayList<>(ips);
+            java.util.Collections.sort(list, (a, b) -> Long.compare(AppConfig.ipValue(a), AppConfig.ipValue(b)));
+            final CheckBox[] boxes = new CheckBox[list.size()];
 
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(Ui.dp(this, 16), Ui.dp(this, 12), Ui.dp(this, 16), Ui.dp(this, 8));
+            LinearLayout wrap = new LinearLayout(this);
+            wrap.setOrientation(LinearLayout.VERTICAL);
+            wrap.setBackgroundColor(0xFF161B22);
+            wrap.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 10));
 
-        TextView head = new TextView(this);
-        head.setText("本组「" + cfg.currentGroup + "」共 " + list.size() + " 路，勾选后可一起移动或删除");
-        head.setTextColor(0xFF8B949E);
-        head.setTextSize(12);
-        col.addView(head);
+            LinearLayout headRow = new LinearLayout(this);
+            headRow.setOrientation(LinearLayout.HORIZONTAL);
+            headRow.setGravity(Gravity.CENTER_VERTICAL);
+            TextView title = new TextView(this);
+            title.setText("多选 · " + cfg.currentGroup);
+            title.setTextColor(0xFFC9D1D9);
+            title.setTextSize(16);
+            title.setTypeface(null, Typeface.BOLD);
+            headRow.addView(title, new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView closeTop = new TextView(this);
+            closeTop.setText("✕");
+            closeTop.setTextColor(0xFF8B949E);
+            closeTop.setTextSize(16);
+            closeTop.setGravity(Gravity.CENTER);
+            closeTop.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 10), 0);
+            headRow.addView(closeTop, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(this, 30)));
+            wrap.addView(headRow);
 
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout boxCol = new LinearLayout(this);
-        boxCol.setOrientation(LinearLayout.VERTICAL);
-        for (int i = 0; i < list.size(); i++) {
-            CheckBox cb = new CheckBox(this);
-            cb.setText(list.get(i));
-            cb.setTextColor(0xFFC9D1D9);
-            cb.setTextSize(13);
-            cb.setButtonTintList(ColorStateList.valueOf(0xFF58A6FF));
-            cb.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 2));
-            boxes[i] = cb;
-            boxCol.addView(cb);
-        }
-        scroll.addView(boxCol, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 300));
-        col.addView(scroll, slp);
+            TextView sub = new TextView(this);
+            sub.setText("本组共 " + list.size() + " 路；勾选后可一起移动或删除");
+            sub.setTextColor(0xFF8B949E);
+            sub.setTextSize(12);
+            sub.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 6));
+            wrap.addView(sub);
 
-        final AlertDialog dialog = new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
-                .setTitle("多选 · " + cfg.currentGroup)
-                .setView(col)
-                .setNegativeButton("关闭", null)
-                .create();
-        Ui.styleDialog(dialog);
+            final TextView countLabel = new TextView(this);
+            countLabel.setTextColor(0xFF58A6FF);
+            countLabel.setTextSize(12);
+            countLabel.setText("已勾选 0 个");
+            wrap.addView(countLabel);
 
-        LinearLayout btnRow = new LinearLayout(this);
-        btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setPadding(Ui.dp(this, 16), 0, Ui.dp(this, 16), Ui.dp(this, 10));
-        String[] labels = {"全选", "清空", "移动到分组", "删除选中"};
-        for (int i = 0; i < labels.length; i++) {
-            final int idx = i;
-            TextView b = new TextView(this);
-            b.setText(labels[i]);
-            b.setTextSize(13);
-            b.setGravity(Gravity.CENTER);
-            b.setTextColor(i >= 2 ? (i == 3 ? 0xFFF85149 : 0xFF3FB950) : 0xFF58A6FF);
-            b.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
-            b.setOnClickListener(v -> {
-                if (idx == 0) {
-                    for (CheckBox cb : boxes) cb.setChecked(true);
-                } else if (idx == 1) {
-                    for (CheckBox cb : boxes) cb.setChecked(false);
-                } else {
-                    List<String> picked = new ArrayList<>();
-                    for (int k = 0; k < boxes.length; k++) {
-                        if (boxes[k].isChecked()) picked.add(list.get(k));
-                    }
-                    if (picked.isEmpty()) {
-                        Ui.toast(this, "还没勾选任何摄像头");
-                        return;
-                    }
-                    if (idx == 2) movePickedToGroup(picked, dialog);
-                    else confirmDeletePicked(picked, dialog);
+            ScrollView scroll = new ScrollView(this);
+            final LinearLayout boxCol = new LinearLayout(this);
+            boxCol.setOrientation(LinearLayout.VERTICAL);
+
+            final Runnable refreshCount = new Runnable() {
+                @Override
+                public void run() {
+                    int n = 0;
+                    for (CheckBox cb : boxes) if (cb.isChecked()) n++;
+                    countLabel.setText("已勾选 " + n + " 个");
                 }
-            });
-            btnRow.addView(b, new LinearLayout.LayoutParams(0, Ui.dp(this, 40), 1f));
+            };
+
+            for (int i = 0; i < list.size(); i++) {
+                CheckBox cb = new CheckBox(this);
+                cb.setText(list.get(i));
+                cb.setTextColor(0xFFC9D1D9);
+                cb.setTextSize(13);
+                cb.setButtonTintList(ColorStateList.valueOf(0xFF58A6FF));
+                cb.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 2));
+                cb.setTag(list.get(i));
+                cb.setOnCheckedChangeListener((btn, checked) -> refreshCount.run());
+                boxes[i] = cb;
+                boxCol.addView(cb, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            scroll.addView(boxCol, new ScrollView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            scroll.setBackgroundResource(R.drawable.bg_input);
+            wrap.addView(scroll, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 300)));
+
+            final Dialog dlg = new Dialog(this, R.style.Theme_CamView_Dialog);
+            dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+
+            LinearLayout actions = new LinearLayout(this);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            actions.setPadding(0, Ui.dp(this, 8), 0, 0);
+            String[] labels = {"全选", "清空", "移动选中", "删除选中"};
+            for (int i = 0; i < labels.length; i++) {
+                final int idx = i;
+                TextView b = new TextView(this);
+                b.setText(labels[i]);
+                b.setTextSize(13);
+                b.setGravity(Gravity.CENTER);
+                b.setTextColor(idx == 3 ? 0xFFF85149 : (idx == 2 ? 0xFF3FB950 : 0xFF58A6FF));
+                b.setPadding(0, Ui.dp(this, 9), 0, Ui.dp(this, 9));
+                b.setBackgroundResource(R.drawable.bg_toolbar_button);
+                b.setOnClickListener(v -> {
+                    if (idx == 0) {
+                        for (CheckBox cb : boxes) cb.setChecked(true);
+                        refreshCount.run();
+                    } else if (idx == 1) {
+                        for (CheckBox cb : boxes) cb.setChecked(false);
+                        refreshCount.run();
+                    } else {
+                        List<String> picked = new ArrayList<>();
+                        for (CheckBox cb : boxes) if (cb.isChecked()) picked.add((String) cb.getTag());
+                        if (picked.isEmpty()) {
+                            Ui.toast(this, "还没勾选任何摄像头");
+                            return;
+                        }
+                        if (idx == 2) movePickedToGroup(picked, dlg);
+                        else confirmDeletePicked(picked, dlg);
+                    }
+                });
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, Ui.dp(this, 38), 1f);
+                blp.leftMargin = Ui.dp(this, 3);
+                blp.rightMargin = Ui.dp(this, 3);
+                actions.addView(b, blp);
+            }
+            wrap.addView(actions, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            closeTop.setOnClickListener(v -> dlg.dismiss());
+            dlg.setContentView(wrap);
+            dlg.show();
+        } catch (Throwable t) {
+            Ui.toast(this, "打开多选失败：" + t.getClass().getSimpleName());
         }
-        dialog.setView(col);
-        LinearLayout wrap = new LinearLayout(this);
-        wrap.setOrientation(LinearLayout.VERTICAL);
-        wrap.addView(col, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        wrap.addView(btnRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        dialog.setContentView(wrap);
-        dialog.show();
     }
 
     /** 把勾选的摄像头整批移到另一个分组 */
-    private void movePickedToGroup(final List<String> picked, final AlertDialog parent) {
+    private void movePickedToGroup(final List<String> picked, final Dialog parent) {
         List<String> targets = cfg.groupNames();
         targets.remove(cfg.currentGroup);
         if (targets.isEmpty()) {
@@ -612,7 +655,7 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void confirmDeletePicked(final List<String> picked, final AlertDialog parent) {
+    private void confirmDeletePicked(final List<String> picked, final Dialog parent) {
         new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
                 .setTitle("删除 " + picked.size() + " 个摄像头")
                 .setMessage("将从「" + cfg.currentGroup + "」删除以下设备：\n"
