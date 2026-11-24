@@ -852,11 +852,24 @@ public class MainActivity extends Activity {
         int sy = listScroll.getScrollY();
         int vh = listScroll.getHeight();
         int margin = Ui.dp(this, 120);
+        int cap = cfg.maxDecoders > 0 ? cfg.maxDecoders : Integer.MAX_VALUE;
+
+        // 先把屏幕内的行按可见程度排序，最多只让 cap 路同时解码，
+        // 其余保持"最后一帧"静默，避免 CPU 打满造成一卡一流畅
+        List<CameraRow> visible = new ArrayList<>();
         for (CameraRow row : rows) {
-            boolean visible = row.getBottom() > sy - margin && row.getTop() < sy + vh + margin;
-            if (row.stream.isActive() != visible) {
-                row.setRowActive(visible);
-            }
+            int top = row.getTop(), bottom = row.getBottom();
+            boolean inView = bottom > sy - margin && top < sy + vh + margin;
+            if (inView) visible.add(row);
+        }
+        int activeCount = 0;
+        for (CameraRow row : visible) {
+            boolean allow = activeCount < cap;
+            if (allow) activeCount++;
+            if (row.stream.isActive() != allow) row.setRowActive(allow);
+        }
+        for (CameraRow row : rows) {
+            if (!visible.contains(row) && row.stream.isActive()) row.setRowActive(false);
         }
         updateStatusBar();
     }

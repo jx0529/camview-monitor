@@ -29,7 +29,8 @@ public class SettingsActivity extends Activity {
     private TextView perPageValue, decodeValue;
     private int perPage;
     private int cacheMs;
-    private TextView cacheValue;
+    private int maxDecoders;
+    private TextView cacheValue, maxDecValue;
     private String decodeMode;
 
     @Override
@@ -38,6 +39,7 @@ public class SettingsActivity extends Activity {
         cfg = App.cfg();
         perPage = cfg.itemsPerPage;
         cacheMs = cfg.cacheMs;
+        maxDecoders = cfg.maxDecoders;
         decodeMode = cfg.gpuMode == null ? "auto" : cfg.gpuMode;
         setContentView(buildUi());
     }
@@ -82,6 +84,15 @@ public class SettingsActivity extends Activity {
         tcpSwitch = switchRow(root, "RTSP 走 TCP（跨路由更稳定，推荐开启）", cfg.rtspTcp);
         lowLatencySwitch = switchRow(root, "强制 UDP 传输（延迟最低，个别设备会无画面）", cfg.forceUdp);
         cacheValue = valueRow(root, "播放缓存", cfg.cacheMs + " ms");
+        maxDecValue = valueRow(root, "同时解码路数", maxDecText(maxDecoders));
+        maxDecValue.setOnClickListener(v -> {
+            String[] items = {"2 路（最省，最流畅）", "4 路", "6 路（推荐）", "8 路", "不限（路多会卡）"};
+            Ui.actionSheet(this, "同时解码路数", items, (index, text) -> {
+                int[] values = {2, 4, 6, 8, 0};
+                maxDecoders = values[index];
+                maxDecValue.setText(maxDecText(maxDecoders));
+            });
+        });
         cacheValue.setOnClickListener(v -> {
             String[] items = {"0 ms（最实时，可能花屏）", "150 ms（推荐）", "300 ms", "800 ms（最稳，延迟大）"};
             Ui.actionSheet(this, "播放缓存", items, (index, text) -> {
@@ -278,6 +289,10 @@ public class SettingsActivity extends Activity {
         });
     }
 
+    private String maxDecText(int v) {
+        return v <= 0 ? "不限" : (v + " 路");
+    }
+
     private void save() {
         int timeout;
         try {
@@ -304,6 +319,7 @@ public class SettingsActivity extends Activity {
         cfg.rtspTcp = tcpSwitch.isChecked();
         cfg.forceUdp = lowLatencySwitch.isChecked();
         cfg.cacheMs = cacheMs;
+        cfg.maxDecoders = maxDecoders;
         cfg.hwDecode = hwSwitch.isChecked();
         cfg.showFps = fpsSwitch.isChecked();
         cfg.gpuMode = decodeMode;

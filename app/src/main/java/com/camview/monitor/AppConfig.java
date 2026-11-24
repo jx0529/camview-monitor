@@ -58,6 +58,8 @@ public class AppConfig {
     public boolean forceUdp = false;
     /** 播放缓存（毫秒），越小越实时 */
     public int cacheMs = 150;
+    /** 同时解码路数上限（超过的行暂停解码，显示最后一帧，避免 CPU 打满导致一卡一流畅） */
+    public int maxDecoders = 6;
     public boolean autoUpdate = true;
     public String gpuMode = "auto";
     /** GitHub 仓库 owner/repo，用于检查更新 */
@@ -95,6 +97,7 @@ public class AppConfig {
             hwDecode = o.optBoolean("hw_decode", hwDecode);
             rtspTcp = o.optBoolean("rtsp_tcp", rtspTcp);
             forceUdp = o.optBoolean("force_udp", forceUdp);
+            maxDecoders = o.optInt("max_decoders", maxDecoders);
             autoUpdate = o.optBoolean("auto_check_update", autoUpdate);
             gpuMode = o.optString("gpu_mode", "auto");
             githubRepo = o.optString("github_repo", "");
@@ -172,6 +175,7 @@ public class AppConfig {
             o.put("hw_decode", hwDecode);
             o.put("rtsp_tcp", rtspTcp);
             o.put("force_udp", forceUdp);
+            o.put("max_decoders", maxDecoders);
             o.put("auto_check_update", autoUpdate);
             o.put("gpu_mode", gpuMode);
             o.put("github_repo", githubRepo);

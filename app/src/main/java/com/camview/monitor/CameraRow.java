@@ -69,7 +69,7 @@ public class CameraRow extends FrameLayout {
             public void run() {
                 if (destroyed) return;
                 updateUi();
-                ui.postDelayed(this, 800);
+                ui.postDelayed(this, 1200);
             }
         }, 800);
     }

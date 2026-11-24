@@ -101,6 +101,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
     private boolean vlcForceTcp = false;
     /** 本轮流是否已经真的出过帧 */
     private volatile boolean vlcGotFrame = false;
+    /** 硬解（MediaCodec）失败过一次 → 本流改走软解 */
+    private boolean vlcHwOff = false;
 
     private final Runnable fpsTick = new Runnable() {
         @Override
@@ -717,6 +719,7 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 args.add("--network-caching=" + Math.max(0, cfg.cacheMs));
                 args.add("--live-caching=" + Math.max(0, cfg.cacheMs));
                 args.add("--clock-synchro=0");
+                if (cfg.hwDecode) args.add("--avcodec-hw=mediacodec");
                 libVlc = new LibVLC(ctx, args);
             }
             MediaPlayer p = new MediaPlayer(libVlc);
@@ -742,6 +745,8 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
             m.addOption(":drop-late-frames");
             m.addOption(":skip-frames");
             m.addOption(":no-audio");
+            // 强制 MediaCodec 硬解：软解多路时 CPU 打满会「一卡一流畅」
+            m.addOption(":avcodec-hw=" + ((cfg.hwDecode && !vlcHwOff) ? "mediacodec" : "any"));
             p.setEventListener(new MediaPlayer.EventListener() {
                 @Override
                 public void onEvent(MediaPlayer.Event event) {
@@ -804,6 +809,20 @@ public class CameraStream implements Player.Listener, VideoFrameMetadataListener
                 resizeVlcWindow();
                 break;
             case MediaPlayer.Event.EncounteredError:
+                if (!vlcHwOff && cfg.hwDecode && !cfg.forceUdp) {
+                    // 硬解不支持该码流 → 关掉硬解重试（软解能出画）
+                    vlcHwOff = true;
+                    lastError = "";
+                    state = ST_CONNECTING;
+                    stopVlc();
+                    handler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!released && vlcMode) startVlc();
+                        }
+                    }, 400);
+                    return;
+                }
                 if (!vlcForceTcp && cfg.forceUdp) {
                     // UDP 播不了 → 退回 TCP 再试一次（UDP 在某设备/网络下可能被丢）
                     vlcForceTcp = true;
