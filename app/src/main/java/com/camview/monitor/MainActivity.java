@@ -6,6 +6,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -17,6 +18,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -144,8 +146,8 @@ public class MainActivity extends Activity {
     }
 
     private void showCameraMenu() {
-        String[] items = {"➕ 添加单个摄像头", "➕➕ 批量添加摄像头", "🔍 扫描网段", "🗑 删除摄像头",
-                "🧹 删除全部摄像头（需二次确认）"};
+        String[] items = {"➕ 添加单个摄像头", "➕➕ 批量添加摄像头", "🔍 扫描网段", "☑ 多选：批量移动 / 删除（本组）",
+                "🗑 删除摄像头（跨分组勾选）", "🧹 删除全部摄像头（需二次确认）"};
         Ui.actionSheet(this, "摄像头", items, (index, text) -> {
             switch (index) {
                 case 0:
@@ -158,9 +160,12 @@ public class MainActivity extends Activity {
                     startActivity(new Intent(this, ScanActivity.class));
                     break;
                 case 3:
-                    deleteCameras();
+                    openMultiSelect();
                     break;
                 case 4:
+                    deleteCameras();
+                    break;
+                case 5:
                     deleteAllCameras();
                     break;
             }
@@ -495,6 +500,137 @@ public class MainActivity extends Activity {
             Ui.toast(this, "成功添加 " + added + " 个摄像头");
         }));
         d.show();
+    }
+
+    /** 多选面板：勾选本组摄像头 → 批量移动到其他分组 / 批量删除 */
+    private void openMultiSelect() {
+        List<String> ips = cfg.groups.get(cfg.currentGroup);
+        if (ips == null || ips.isEmpty()) {
+            Ui.toast(this, "当前分组没有摄像头");
+            return;
+        }
+        final List<String> list = new ArrayList<>(ips);
+        java.util.Collections.sort(list, (a, b) -> Long.compare(AppConfig.ipValue(a), AppConfig.ipValue(b)));
+        final CheckBox[] boxes = new CheckBox[list.size()];
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(Ui.dp(this, 16), Ui.dp(this, 12), Ui.dp(this, 16), Ui.dp(this, 8));
+
+        TextView head = new TextView(this);
+        head.setText("本组「" + cfg.currentGroup + "」共 " + list.size() + " 路，勾选后可一起移动或删除");
+        head.setTextColor(0xFF8B949E);
+        head.setTextSize(12);
+        col.addView(head);
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout boxCol = new LinearLayout(this);
+        boxCol.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < list.size(); i++) {
+            CheckBox cb = new CheckBox(this);
+            cb.setText(list.get(i));
+            cb.setTextColor(0xFFC9D1D9);
+            cb.setTextSize(13);
+            cb.setButtonTintList(ColorStateList.valueOf(0xFF58A6FF));
+            cb.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 2));
+            boxes[i] = cb;
+            boxCol.addView(cb);
+        }
+        scroll.addView(boxCol, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 300));
+        col.addView(scroll, slp);
+
+        final AlertDialog dialog = new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle("多选 · " + cfg.currentGroup)
+                .setView(col)
+                .setNegativeButton("关闭", null)
+                .create();
+        Ui.styleDialog(dialog);
+
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setPadding(Ui.dp(this, 16), 0, Ui.dp(this, 16), Ui.dp(this, 10));
+        String[] labels = {"全选", "清空", "移动到分组", "删除选中"};
+        for (int i = 0; i < labels.length; i++) {
+            final int idx = i;
+            TextView b = new TextView(this);
+            b.setText(labels[i]);
+            b.setTextSize(13);
+            b.setGravity(Gravity.CENTER);
+            b.setTextColor(i >= 2 ? (i == 3 ? 0xFFF85149 : 0xFF3FB950) : 0xFF58A6FF);
+            b.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+            b.setOnClickListener(v -> {
+                if (idx == 0) {
+                    for (CheckBox cb : boxes) cb.setChecked(true);
+                } else if (idx == 1) {
+                    for (CheckBox cb : boxes) cb.setChecked(false);
+                } else {
+                    List<String> picked = new ArrayList<>();
+                    for (int k = 0; k < boxes.length; k++) {
+                        if (boxes[k].isChecked()) picked.add(list.get(k));
+                    }
+                    if (picked.isEmpty()) {
+                        Ui.toast(this, "还没勾选任何摄像头");
+                        return;
+                    }
+                    if (idx == 2) movePickedToGroup(picked, dialog);
+                    else confirmDeletePicked(picked, dialog);
+                }
+            });
+            btnRow.addView(b, new LinearLayout.LayoutParams(0, Ui.dp(this, 40), 1f));
+        }
+        dialog.setView(col);
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.addView(col, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        wrap.addView(btnRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        dialog.setContentView(wrap);
+        dialog.show();
+    }
+
+    /** 把勾选的摄像头整批移到另一个分组 */
+    private void movePickedToGroup(final List<String> picked, final AlertDialog parent) {
+        List<String> targets = cfg.groupNames();
+        targets.remove(cfg.currentGroup);
+        if (targets.isEmpty()) {
+            Ui.toast(this, "没有其他分组，请先在顶部「📁 分组」里新建分组");
+            return;
+        }
+        final String[] arr = targets.toArray(new String[0]);
+        Ui.actionSheet(this, "移动到哪个分组（" + picked.size() + " 路）", arr, (index, text) -> {
+            int moved = 0;
+            for (String ip : picked) {
+                if (cfg.moveCamera(ip, cfg.currentGroup, arr[index])) moved++;
+            }
+            if (parent != null && parent.isShowing()) parent.dismiss();
+            refreshAll();
+            Ui.toast(this, "已移动 " + moved + " 个摄像头到「" + arr[index] + "」");
+        });
+    }
+
+    private void confirmDeletePicked(final List<String> picked, final AlertDialog parent) {
+        new AlertDialog.Builder(this, R.style.Theme_CamView_Dialog)
+                .setTitle("删除 " + picked.size() + " 个摄像头")
+                .setMessage("将从「" + cfg.currentGroup + "」删除以下设备：\n"
+                        + picked.subList(0, Math.min(8, picked.size())).toString().replace("[", "").replace("]", "")
+                        + (picked.size() > 8 ? " 等 " + picked.size() + " 个" : "")
+                        + "\n\n此操作不可撤销。")
+                .setPositiveButton("删除", (d, w) -> {
+                    int n = 0;
+                    for (String ip : picked) {
+                        cfg.removeCamera(ip);
+                        n++;
+                    }
+                    if (parent != null && parent.isShowing()) parent.dismiss();
+                    refreshAll();
+                    Ui.toast(this, "已删除 " + n + " 个摄像头");
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void deleteCameras() {
