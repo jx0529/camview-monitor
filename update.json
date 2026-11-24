@@ -1,6 +1,6 @@
 {
-  "version": "1.0.14",
-  "notes": "修复：默认走TCP小缓存，保证出画面；UDP改为可选并加8秒无画面自动回退；列表不再显示绿色实时字样",
-  "apk_path": "release/camview-monitor-1.0.14.apk",
-  "size": 23750370
+  "version": "1.0.15",
+  "notes": "修复竖屏/VLC模式误显示“已连接，等待画面…”遮住画面的问题",
+  "apk_path": "release/camview-monitor-1.0.15.apk",
+  "size": 23750142
 }

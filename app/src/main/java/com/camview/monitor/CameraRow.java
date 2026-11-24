@@ -98,8 +98,10 @@ public class CameraRow extends FrameLayout {
         switch (state) {
             case CameraStream.ST_LIVE:
                 dot.setBackgroundResource(R.drawable.dot_green);
-                statusText.setVisibility(fps <= 0.01f ? View.VISIBLE : View.GONE);
-                if (fps <= 0.01f) statusText.setText("已连接，等待画面…");
+                // VLC/抓图通道拿不到 fps 统计，不能据此判定“没有画面”
+                boolean frameSeen = stream.isVlcMode() || stream.isSnapMode() || fps > 0.01f;
+                statusText.setVisibility(frameSeen ? View.GONE : View.VISIBLE);
+                if (!frameSeen) statusText.setText("已连接，等待画面…");
                 break;
             case CameraStream.ST_CONNECTING:
                 dot.setBackgroundResource(R.drawable.dot_orange);
