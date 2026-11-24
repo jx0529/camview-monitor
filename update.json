@@ -1,6 +1,6 @@
 {
-  "version": "1.0.26",
-  "notes": "改为就地多选：长按摄像头进入勾选模式，列表行左侧显示勾选框，底部操作条直接全选/移动/删除/取消",
-  "apk_path": "release/camview-monitor-1.0.26.apk",
-  "size": 23777198
+  "version": "1.0.27",
+  "notes": "移动/删除分组时只摘掉对应行，其余画面保持连续不重连；配置改为一次性保存，消除卡顿",
+  "apk_path": "release/camview-monitor-1.0.27.apk",
+  "size": 23777570
 }

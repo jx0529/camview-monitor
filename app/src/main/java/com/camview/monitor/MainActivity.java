@@ -543,7 +543,41 @@ public class MainActivity extends Activity {
         selectMode = false;
         selectedIps.clear();
         showSelectBar(false);
-        renderPage();
+        // 只恢复点击行为，不重建播放器（重建会让所有摄像头重新连接，非常卡）
+        for (CameraRow r : rows) bindRowNormal(r);
+    }
+
+    /** 把某一行恢复成正常行为（点=全屏，长按=功能菜单） */
+    private void bindRowNormal(final CameraRow row) {
+        row.setSelectMode(false, false);
+        row.setOnClickListener(v -> openFullscreen(row.ip));
+        row.setOnLongClickListener(v -> {
+            showCameraItemMenu(row);
+            return true;
+        });
+    }
+
+    /** 移动/删除后只摘掉这几行，其余画面保持连续，不重新加载 */
+    private void removeRowsQuietly(java.util.Collection<String> gone) {
+        for (CameraRow r : new ArrayList<>(rows)) {
+            if (gone.contains(r.ip)) {
+                listContainer.removeView(r);
+                try { r.destroy(); } catch (Throwable ignored) { }
+                rows.remove(r);
+            } else {
+                bindRowNormal(r);
+            }
+        }
+        // 当前页被搬空且后面还有设备 → 补一页（只在这种情况下才真正重载）
+        if (rows.isEmpty() && cfg.groupCameraCount() > 0) {
+            if (cfg.currentPage > 0 && cfg.currentPage >= cfg.totalPages()) {
+                cfg.currentPage = Math.max(0, cfg.totalPages() - 1);
+            }
+            renderPage();
+            return;
+        }
+        updatePageControls();
+        updateVisibility();
     }
 
     private void toggleSelect(String ip, CameraRow row) {
@@ -646,12 +680,28 @@ public class MainActivity extends Activity {
         }
         final String[] arr = targets.toArray(new String[0]);
         Ui.actionSheet(this, "移动 " + selectedIps.size() + " 路到", arr, (index, text) -> {
+            List<String> picked = new ArrayList<>(selectedIps);
+            List<String> movedIps = new ArrayList<>();
             int moved = 0;
-            for (String ip : new ArrayList<>(selectedIps)) {
-                if (cfg.moveCamera(ip, cfg.currentGroup, arr[index])) moved++;
+            // 直接改内存里的分组表，最后统一 save 一次（逐个 save 会反复写盘）
+            List<String> src = cfg.groups.get(cfg.currentGroup);
+            List<String> dst = cfg.groups.get(arr[index]);
+            if (src != null && dst != null) {
+                for (String ip : picked) {
+                    if (src.remove(ip)) {
+                        if (!dst.contains(ip)) dst.add(ip);
+                        movedIps.add(ip);
+                        moved++;
+                    }
+                }
+                cfg.save();
             }
+            selectMode = false;
+            selectedIps.clear();
+            showSelectBar(false);
+            removeRowsQuietly(movedIps);
+            if (groupChip != null) groupChip.setText("📁 " + cfg.currentGroup);
             Ui.toast(this, "已移动 " + moved + " 个到「" + arr[index] + "」");
-            exitSelectMode();
         });
     }
 
@@ -668,8 +718,11 @@ public class MainActivity extends Activity {
                         + (picked.size() > 8 ? " 等 " + picked.size() + " 个" : ""))
                 .setPositiveButton("删除", (d, w) -> {
                     for (String ip : picked) cfg.removeCamera(ip);
+                    selectMode = false;
+                    selectedIps.clear();
+                    showSelectBar(false);
+                    removeRowsQuietly(picked);
                     Ui.toast(this, "已删除 " + picked.size() + " 个");
-                    exitSelectMode();
                 })
                 .setNegativeButton("取消", null)
                 .show();
@@ -737,12 +790,7 @@ public class MainActivity extends Activity {
                     return true;
                 });
             } else {
-                row.setSelectMode(false, false);
-                row.setOnClickListener(v -> openFullscreen(ip));
-                row.setOnLongClickListener(v -> {
-                    showCameraItemMenu(row);
-                    return true;
-                });
+                bindRowNormal(row);
             }
             listContainer.addView(row, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
