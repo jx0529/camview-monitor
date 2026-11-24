@@ -22,13 +22,16 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * 摄像头体检：分批（每批 6 路）真实解码预览，连上但 10 秒没出过一帧的判为“无画面”，
- * 检测结束后可勾选删除。
+ * 摄像头体检：分批（每批 6 路）真实连接，能连上（RTSP 握手成功）算正常，
+ * 连不上/报错判为连接失败，检测结束后可勾选删除。
  */
 public class CheckActivity extends Activity {
 
     private static final int PER_BATCH = 6;
-    private static final long BATCH_WAIT_MS = 10000L;
+    /** 每批最长等待（连接判定） */
+    private static final long BATCH_WAIT_MS = 12000L;
+    /** 轮询间隔：一路一旦连上/失败就继续等其它路，全部有结果就立刻下一批 */
+    private static final long POLL_MS = 1200L;
 
     private AppConfig cfg;
     private TextView progressLabel, resultLabel, headLabel;
@@ -39,6 +42,7 @@ public class CheckActivity extends Activity {
     private final List<String> queue = new ArrayList<>();
     private final List<String> bad = new ArrayList<>();
     private final List<String> okList = new ArrayList<>();
+    private final java.util.Map<String, String> badReasons = new java.util.LinkedHashMap<>();
     private final List<CameraStream> live = new ArrayList<>();
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -77,8 +81,9 @@ public class CheckActivity extends Activity {
         root.addView(headLabel);
 
         TextView tip = new TextView(this);
-        tip.setText("每批 " + PER_BATCH + " 路真实解码预览，等 " + (BATCH_WAIT_MS / 1000)
-                + " 秒看有没有出画面。连上但一帧都没有的判为无画面。");
+        tip.setText("每批 " + PER_BATCH + " 路同时连接，能连上（RTSP 握手成功）就算正常；"
+                + "连不上或报错的判为连接失败。全部有结果会立刻进入下一批，最长等 "
+                + (BATCH_WAIT_MS / 1000) + " 秒。");
         tip.setTextColor(0xFF8B949E);
         tip.setTextSize(11);
         tip.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 6));
@@ -146,7 +151,7 @@ public class CheckActivity extends Activity {
         bottom.setPadding(0, Ui.dp(this, 8), 0, 0);
         root.addView(bottom);
 
-        TextView delBtn = actionButton("🗑 删除选中的无画面", 0xFFF85149);
+        TextView delBtn = actionButton("🗑 删除选中的失败设备", 0xFFF85149);
         delBtn.setOnClickListener(v -> deleteSelected());
         bottom.addView(delBtn, new LinearLayout.LayoutParams(0, Ui.dp(this, 42), 1f));
 
@@ -174,6 +179,7 @@ public class CheckActivity extends Activity {
         stopped = false;
         bad.clear();
         okList.clear();
+        badReasons.clear();
         cursor = 0;
         resultBox.removeAllViews();
         buildGrid();
@@ -276,21 +282,39 @@ public class CheckActivity extends Activity {
             });
         }
 
-        progressLabel.setText("检测中 " + (cursor + shown) + " / " + queue.size()
-                + " · 无画面 " + bad.size());
+        progressLabel.setText("连接中 " + (cursor + shown) + " / " + queue.size()
+                + " · 已失败 " + bad.size());
 
+        final long deadline = System.currentTimeMillis() + BATCH_WAIT_MS;
         ui.postDelayed(new Runnable() {
             @Override
             public void run() {
+                boolean allDecided = true;
+                for (CameraStream s : live) {
+                    if (s.state == CameraStream.ST_CONNECTING) {
+                        allDecided = false;
+                        break;
+                    }
+                }
+                if (!allDecided && System.currentTimeMillis() < deadline && !stopped) {
+                    ui.postDelayed(this, POLL_MS);
+                    return;
+                }
+                // 结算：连上（ST_LIVE）算正常，其余算连接失败
                 for (int i = 0; i < batchIps.size(); i++) {
                     String ip = batchIps.get(i);
                     CameraStream s = live.get(i);
-                    boolean hasFrame = s.lastFrameTs > 0 || s.isSnapMode() && s.fps > 0.01f;
-                    if (hasFrame) okList.add(ip);
-                    else bad.add(ip);
+                    if (s.state == CameraStream.ST_LIVE) {
+                        okList.add(ip);
+                    } else {
+                        bad.add(ip);
+                        if (s.lastError != null && !s.lastError.isEmpty()) badReasons.put(ip, s.lastError);
+                    }
                 }
                 cursor += batchIps.size();
                 bar.setProgress(Math.min(cursor, queue.size()));
+                progressLabel.setText("已检测 " + Math.min(cursor, queue.size()) + " / " + queue.size()
+                        + " · 连接失败 " + bad.size());
                 if (!stopped) {
                     ui.post(new Runnable() {
                         @Override
@@ -300,7 +324,7 @@ public class CheckActivity extends Activity {
                     });
                 }
             }
-        }, BATCH_WAIT_MS);
+        }, POLL_MS);
     }
 
     private void finishCheck(String reason) {
@@ -309,18 +333,18 @@ public class CheckActivity extends Activity {
             try { s.release(); } catch (Throwable ignored) { }
         }
         live.clear();
-        progressLabel.setText(reason + " · 有画面 " + okList.size() + " 路 · 无画面 " + bad.size() + " 路");
-        headLabel.setText("🩺 检测结果：无画面 " + bad.size() + " / " + queue.size());
+        progressLabel.setText(reason + " · 连接正常 " + okList.size() + " 路 · 连接失败 " + bad.size() + " 路");
+        headLabel.setText("🩺 检测结果：连接失败 " + bad.size() + " / " + queue.size());
         renderResult();
         stopped = true;
     }
 
     private void renderResult() {
         resultBox.removeAllViews();
-        resultLabel.setText("无画面设备 " + bad.size() + " 个（勾选后可删除）");
+        resultLabel.setText("连接失败设备 " + bad.size() + " 个（勾选后可删除）");
         if (bad.isEmpty()) {
             TextView ok = new TextView(this);
-            ok.setText("✔ 全部 " + queue.size() + " 路都能出画面");
+            ok.setText("✔ 全部 " + queue.size() + " 路都能连上");
             ok.setTextColor(0xFF3FB950);
             ok.setTextSize(13);
             ok.setPadding(Ui.dp(this, 6), Ui.dp(this, 10), Ui.dp(this, 6), Ui.dp(this, 10));
@@ -329,7 +353,8 @@ public class CheckActivity extends Activity {
         }
         for (String ip : bad) {
             CheckBox cb = new CheckBox(this);
-            cb.setText(ip);
+            String reason = badReasons.get(ip);
+            cb.setText(ip + (reason == null || reason.isEmpty() ? "" : "   " + reason));
             cb.setTag(ip);
             cb.setChecked(true);
             cb.setTextColor(0xFFF85149);
@@ -353,7 +378,7 @@ public class CheckActivity extends Activity {
             Ui.toast(this, "没有勾选任何设备");
             return;
         }
-        AlertDialog d = Ui.dialog(this).setTitle("删除 " + picked.size() + " 个无画面摄像头")
+        AlertDialog d = Ui.dialog(this).setTitle("删除 " + picked.size() + " 个连接失败的摄像头")
                 .setMessage("将从所有分组里移除以下设备：\n"
                         + picked.subList(0, Math.min(8, picked.size())).toString()
                         .replace("[", "").replace("]", "")
@@ -366,7 +391,7 @@ public class CheckActivity extends Activity {
                     }
                     Ui.toast(this, "已删除 " + picked.size() + " 个");
                     renderResult();
-                    progressLabel.setText("已删除 " + picked.size() + " 个 · 剩余无画面 " + bad.size() + " 路");
+                    progressLabel.setText("已删除 " + picked.size() + " 个 · 剩余连接失败 " + bad.size() + " 路");
                 })
                 .setNegativeButton("取消", null)
                 .create();

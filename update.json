@@ -1,6 +1,6 @@
 {
-  "version": "1.0.22",
-  "notes": "新增摄像头体检：每批6路真实解码，10秒无帧判为无画面；支持查当前分组或全部，结果可勾选批量删除",
-  "apk_path": "release/camview-monitor-1.0.22.apk",
-  "size": 23775478
+  "version": "1.0.23",
+  "notes": "体检改为按连接成功判定：能连上就算正常，连不上/报错即失败并显示原因；每批全部有结果立刻进入下一批，速度更快",
+  "apk_path": "release/camview-monitor-1.0.23.apk",
+  "size": 23775918
 }
