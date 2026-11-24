@@ -31,6 +31,8 @@ public class QuadActivity extends Activity {
 
     private String groupName;
     private int base = 0;
+    private int perPage = 4;
+    private int cols = 2;
     private FrameLayout root;
     private LinearLayout grid;
     private TextView prevBtn, nextBtn, pageLabel;
@@ -50,7 +52,10 @@ public class QuadActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         groupName = getIntent().getStringExtra("group");
         if (groupName == null) groupName = App.cfg().currentGroup;
-        base = getIntent().getIntExtra("start", App.cfg().currentPage * App.cfg().itemsPerPage);
+        perPage = App.cfg().quadPerPage();
+        cols = App.cfg().quadCols();
+        int start = getIntent().getIntExtra("start", App.cfg().currentPage * App.cfg().itemsPerPage);
+        base = Math.max(0, (start / perPage) * perPage);
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
@@ -86,14 +91,14 @@ public class QuadActivity extends Activity {
         nav.setBackgroundColor(0x66000000);
         nav.setPadding(Ui.dp(this, 6), Ui.dp(this, 2), Ui.dp(this, 6), Ui.dp(this, 2));
 
-        prevBtn = makeNavButton("◀ 上 4 个");
+        prevBtn = makeNavButton("◀ 上 " + perPage + " 个");
         prevBtn.setOnClickListener(v -> turnPage(-1));
         pageLabel = new TextView(this);
         pageLabel.setTextColor(0xFFC9D1D9);
         pageLabel.setTextSize(12);
         pageLabel.setGravity(Gravity.CENTER);
         pageLabel.setPadding(Ui.dp(this, 14), 0, Ui.dp(this, 14), 0);
-        nextBtn = makeNavButton("下 4 个 ▶");
+        nextBtn = makeNavButton("下 " + perPage + " 个 ▶");
         nextBtn.setOnClickListener(v -> turnPage(1));
 
         nav.addView(prevBtn, new LinearLayout.LayoutParams(
@@ -184,6 +189,7 @@ public class QuadActivity extends Activity {
         drawer.addView(drawerAction("↻ 重连本页", this::reconnectPage));
         drawer.addView(drawerAction("🩺 检测无画面并删除", this::cleanNoFrame));
         drawer.addView(drawerAction("✎ 编辑分组（重命名）", this::renameGroupDialog));
+        drawer.addView(drawerAction("▦ 切换 4 路 / 9 路同屏", this::toggleGridMode));
         drawer.addView(drawerAction("⇆ 本组首屏", () -> {
             base = 0;
             loadPage();
@@ -304,17 +310,31 @@ public class QuadActivity extends Activity {
     private void turnPage(int dir) {
         List<String> ips = groupIps();
         int total = ips.size();
-        int target = base + dir * 4;
+        int target = base + dir * perPage;
         if (target < 0) return;
         if (target >= total) return;
         base = target;
         loadPage();
     }
 
-    /** 按 base 取最多 4 路，重建界面并挂上播放器 */
+    /** 在 2×2 与 3×3 之间切换，并回到能容纳当前首页的页码 */
+    private void toggleGridMode() {
+        App.cfg().quadGrid = App.cfg().quadGrid == 9 ? 4 : 9;
+        App.cfg().save();
+        perPage = App.cfg().quadPerPage();
+        cols = App.cfg().quadCols();
+        base = Math.max(0, (base / perPage) * perPage);
+        prevBtn.setText("◀ 上 " + perPage + " 个");
+        nextBtn.setText("下 " + perPage + " 个 ▶");
+        loadPage();
+        closeDrawer();
+        Ui.toast(this, perPage == 9 ? "已切换为 9 路（3×3）" : "已切换为 4 路（2×2）");
+    }
+
+    /** 按 base 取最多 perPage 路，重建界面并挂上播放器 */
     private void loadPage() {
         List<String> ips = groupIps();
-        int shown = Math.max(0, Math.min(4, ips.size() - base));
+        int shown = Math.max(0, Math.min(perPage, ips.size() - base));
 
         for (CameraStream s : streams) {
             try { s.release(); } catch (Throwable ignored) { }
@@ -329,13 +349,14 @@ public class QuadActivity extends Activity {
         root.addView(grid, 0, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        for (int row = 0; row < 2; row++) {
+        int rows = perPage / cols;
+        for (int row = 0; row < rows; row++) {
             LinearLayout line = new LinearLayout(this);
             line.setOrientation(LinearLayout.HORIZONTAL);
             grid.addView(line, new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-            for (int c = 0; c < 2; c++) {
-                int idx = row * 2 + c;
+            for (int c = 0; c < cols; c++) {
+                int idx = row * cols + c;
                 String ip = idx < shown ? ips.get(base + idx) : null;
                 line.addView(buildCell(ip), new LinearLayout.LayoutParams(0,
                         LinearLayout.LayoutParams.MATCH_PARENT, 1f));
@@ -352,13 +373,13 @@ public class QuadActivity extends Activity {
             streams.add(s);
         }
 
-        int pageNo = base / 4 + 1;
-        int pageTotal = Math.max(1, (int) Math.ceil(ips.size() / 4.0));
-        pageLabel.setText("第 " + pageNo + " / " + pageTotal + " 页 · "
-                + (ips.isEmpty() ? 0 : base + 1) + "–" + Math.min(base + 4, ips.size())
+        int pageNo = base / perPage + 1;
+        int pageTotal = Math.max(1, (int) Math.ceil(ips.size() / (double) perPage));
+        pageLabel.setText(pageNo + " / " + pageTotal + " 页 · "
+                + (ips.isEmpty() ? 0 : base + 1) + "–" + Math.min(base + perPage, ips.size())
                 + " / " + ips.size());
         prevBtn.setAlpha(base > 0 ? 1f : 0.35f);
-        nextBtn.setAlpha(base + 4 < ips.size() ? 1f : 0.35f);
+        nextBtn.setAlpha(base + perPage < ips.size() ? 1f : 0.35f);
 
         root.post(new Runnable() {
             @Override

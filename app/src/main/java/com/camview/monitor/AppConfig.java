@@ -60,6 +60,16 @@ public class AppConfig {
     public int cacheMs = 150;
     /** 同时解码路数上限（超过的行暂停解码，显示最后一帧，避免 CPU 打满导致一卡一流畅） */
     public int maxDecoders = 6;
+    /** 横屏同屏路数：4（2×2）或 9（3×3） */
+    public int quadGrid = 4;
+
+    public int quadPerPage() {
+        return quadGrid == 9 ? 9 : 4;
+    }
+
+    public int quadCols() {
+        return quadGrid == 9 ? 3 : 2;
+    }
     public boolean autoUpdate = true;
     public String gpuMode = "auto";
     /** GitHub 仓库 owner/repo，用于检查更新 */
@@ -98,6 +108,8 @@ public class AppConfig {
             rtspTcp = o.optBoolean("rtsp_tcp", rtspTcp);
             forceUdp = o.optBoolean("force_udp", forceUdp);
             maxDecoders = o.optInt("max_decoders", maxDecoders);
+            quadGrid = o.optInt("quad_grid", quadGrid);
+            if (quadGrid != 4 && quadGrid != 9) quadGrid = 4;
             autoUpdate = o.optBoolean("auto_check_update", autoUpdate);
             gpuMode = o.optString("gpu_mode", "auto");
             githubRepo = o.optString("github_repo", "");
@@ -176,6 +188,7 @@ public class AppConfig {
             o.put("rtsp_tcp", rtspTcp);
             o.put("force_udp", forceUdp);
             o.put("max_decoders", maxDecoders);
+            o.put("quad_grid", quadGrid);
             o.put("auto_check_update", autoUpdate);
             o.put("gpu_mode", gpuMode);
             o.put("github_repo", githubRepo);

@@ -274,33 +274,40 @@ public class MainActivity extends Activity {
             return;
         }
         final String[] arr = groupIps.toArray(new String[0]);
+        final int perPage = cfg.quadPerPage();
         final boolean[] checked = new boolean[arr.length];
-        // 默认勾选当前页的前 4 路
+        // 默认勾选当前页的前 perPage 路
         int start = cfg.currentPage * cfg.itemsPerPage;
-        for (int i = 0; i < 4 && start + i < arr.length; i++) checked[start + i] = true;
+        for (int i = 0; i < perPage && start + i < arr.length; i++) checked[start + i] = true;
 
         AlertDialog.Builder b = Ui.dialog(this);
-        b.setTitle("选 4 路横屏同屏");
+        b.setTitle("选 " + perPage + " 路横屏同屏（当前 " + (perPage == 9 ? "3×3" : "2×2") + "）");
         b.setMultiChoiceItems(arr, checked, (d, which, isChecked) -> {
             checked[which] = isChecked;
             int n = 0;
             for (boolean c : checked) if (c) n++;
-            if (n > 4) {
+            if (n > perPage) {
                 checked[which] = false;
                 ((AlertDialog) d).getListView().setItemChecked(which, false);
-                Ui.toast(this, "最多选 4 路");
+                Ui.toast(this, "最多选 " + perPage + " 路");
             }
         });
         b.setPositiveButton("打开", (d, w) -> {
+            int first = -1;
             List<String> sel = new ArrayList<>();
-            for (int i = 0; i < arr.length && sel.size() < 4; i++) if (checked[i]) sel.add(arr[i]);
-            if (sel.size() < 4) {
-                Ui.toast(this, "请选满 4 路（选中 " + sel.size() + " 路）");
+            for (int i = 0; i < arr.length && sel.size() < perPage; i++) {
+                if (checked[i]) {
+                    if (first < 0) first = i;
+                    sel.add(arr[i]);
+                }
+            }
+            if (sel.isEmpty()) {
+                Ui.toast(this, "至少选 1 路");
                 return;
             }
             Intent i = new Intent(this, QuadActivity.class);
             i.putExtra("group", cfg.currentGroup);
-            i.putExtra("start", cfg.currentPage * cfg.itemsPerPage);
+            i.putExtra("start", Math.max(0, first));
             startActivity(i);
         });
         b.setNegativeButton("取消", null);

@@ -30,7 +30,8 @@ public class SettingsActivity extends Activity {
     private int perPage;
     private int cacheMs;
     private int maxDecoders;
-    private TextView cacheValue, maxDecValue;
+    private int quadGrid;
+    private TextView cacheValue, maxDecValue, quadValue;
     private String decodeMode;
 
     @Override
@@ -40,6 +41,7 @@ public class SettingsActivity extends Activity {
         perPage = cfg.itemsPerPage;
         cacheMs = cfg.cacheMs;
         maxDecoders = cfg.maxDecoders;
+        quadGrid = cfg.quadGrid;
         decodeMode = cfg.gpuMode == null ? "auto" : cfg.gpuMode;
         setContentView(buildUi());
     }
@@ -85,6 +87,14 @@ public class SettingsActivity extends Activity {
         lowLatencySwitch = switchRow(root, "强制 UDP 传输（延迟最低，个别设备会无画面）", cfg.forceUdp);
         cacheValue = valueRow(root, "播放缓存", cfg.cacheMs + " ms");
         maxDecValue = valueRow(root, "同时解码路数", maxDecText(maxDecoders));
+        quadValue = valueRow(root, "横屏同屏路数", (quadGrid == 9 ? "9 路（3×3）" : "4 路（2×2）"));
+        quadValue.setOnClickListener(v -> {
+            String[] items = {"4 路（2×2）", "9 路（3×3）"};
+            Ui.actionSheet(this, "横屏同屏路数", items, (index, text) -> {
+                quadGrid = index == 1 ? 9 : 4;
+                quadValue.setText(quadGrid == 9 ? "9 路（3×3）" : "4 路（2×2）");
+            });
+        });
         maxDecValue.setOnClickListener(v -> {
             String[] items = {"2 路（最省，最流畅）", "4 路", "6 路（推荐）", "8 路", "不限（路多会卡）"};
             Ui.actionSheet(this, "同时解码路数", items, (index, text) -> {
@@ -320,6 +330,7 @@ public class SettingsActivity extends Activity {
         cfg.forceUdp = lowLatencySwitch.isChecked();
         cfg.cacheMs = cacheMs;
         cfg.maxDecoders = maxDecoders;
+        cfg.quadGrid = quadGrid;
         cfg.hwDecode = hwSwitch.isChecked();
         cfg.showFps = fpsSwitch.isChecked();
         cfg.gpuMode = decodeMode;
